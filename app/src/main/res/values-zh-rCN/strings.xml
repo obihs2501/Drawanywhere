@@ -68,6 +68,9 @@
     <string name="settings">设置</string>
     <string name="open_detailed_settings">详细设置</string>
     <string name="save_drawing">保存绘制</string>
+    <string name="quick_launch_actions">快捷启动台</string>
+    <string name="pin_action">固定</string>
+    <string name="unpin_action">取消固定</string>
     <string name="save_transparent_png">透明背景 PNG</string>
     <string name="save_backdrop_png">纸张背景 PNG</string>
     <string name="save_screen_backdrop_png">屏幕背景 PNG</string>

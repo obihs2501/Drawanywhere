@@ -64,6 +64,7 @@ class PreferencesManager(private val context: Context) {
         val SAVED_ERASER_SIZES = stringPreferencesKey("saved_eraser_sizes")
         val EXPORT_TREE_URI = stringPreferencesKey("export_tree_uri")
         val STYLUS_CYCLE_COLORS = stringPreferencesKey("stylus_cycle_colors")
+        val QUICK_LAUNCH_ACTIONS = stringPreferencesKey("quick_launch_actions")
 
         // Pen-specific keys (for saving multiple pens)
         fun penColorKey(penType: PenType) = intPreferencesKey("${penType.name}_color")
@@ -151,6 +152,8 @@ class PreferencesManager(private val context: Context) {
         val exportTreeUri = preferences[PreferencesKeys.EXPORT_TREE_URI]
         val stylusCycleColors = decodeColorList(preferences[PreferencesKeys.STYLUS_CYCLE_COLORS])
             .ifEmpty { defaultUiState.stylusCycleColors }
+        val quickLaunchActions = decodeStringList(preferences[PreferencesKeys.QUICK_LAUNCH_ACTIONS])
+            .ifEmpty { defaultUiState.secondDrawerPinnedButtons }
 
         return UiState(
             currentPenType = currentPenType,
@@ -180,6 +183,7 @@ class PreferencesManager(private val context: Context) {
             savedEraserSizes = savedEraserSizes,
             exportTreeUri = exportTreeUri,
             stylusCycleColors = stylusCycleColors,
+            secondDrawerPinnedButtons = quickLaunchActions,
             canvasVisible = visibleOnStart,
             firstDrawerOpen = visibleOnStart
         )
@@ -209,6 +213,7 @@ class PreferencesManager(private val context: Context) {
                 preferences[PreferencesKeys.EXPORT_TREE_URI] = it
             } ?: preferences.remove(PreferencesKeys.EXPORT_TREE_URI)
             preferences[PreferencesKeys.STYLUS_CYCLE_COLORS] = encodeColorList(uiState.stylusCycleColors)
+            preferences[PreferencesKeys.QUICK_LAUNCH_ACTIONS] = encodeStringList(uiState.secondDrawerPinnedButtons)
 
             // Save each pen's configuration
             for ((penType, config) in uiState.penConfigs) {
@@ -263,4 +268,15 @@ class PreferencesManager(private val context: Context) {
 
     private fun encodeFloatList(values: List<Float>): String =
         values.joinToString(",") { it.toString() }
+
+    private fun decodeStringList(raw: String?): List<String> =
+        raw?.takeIf { it.isNotBlank() }
+            ?.split(",")
+            ?.map(String::trim)
+            ?.filter(String::isNotEmpty)
+            ?.distinct()
+            ?: emptyList()
+
+    private fun encodeStringList(values: List<String>): String =
+        values.joinToString(",")
 }

@@ -232,12 +232,7 @@ class MainService : Service() {
                 canvasView.visibility = if (state.canvasVisible) View.VISIBLE else View.GONE
                 updateToolbarWindowLayout(toolbarParams)
                 updateToolbarAlpha()
-                if (state.canvasVisible &&
-                    state.stylusButtonScheme != StylusButtonScheme.Disabled &&
-                    !state.canvasPassthrough
-                ) {
-                    canvasView.requestStylusKeyFocus()
-                }
+                syncCanvasKeyFocus(state)
             }
         }
 
@@ -276,11 +271,22 @@ class MainService : Service() {
 
     private fun applyCanvasInputMode(params: LayoutParams, state: UiState) {
         var flags = LayoutParams.FLAG_NOT_TOUCH_MODAL or LayoutParams.FLAG_LAYOUT_IN_SCREEN
-        if (state.canvasPassthrough) flags = flags or LayoutParams.FLAG_NOT_TOUCHABLE
-        if (state.stylusButtonScheme == StylusButtonScheme.Disabled) {
+        if (state.canvasPassthrough) {
             flags = flags or LayoutParams.FLAG_NOT_FOCUSABLE
         }
+        if (state.canvasPassthrough) flags = flags or LayoutParams.FLAG_NOT_TOUCHABLE
         params.flags = flags
+    }
+
+    private fun syncCanvasKeyFocus(state: UiState) {
+        if (state.canvasVisible &&
+            !state.canvasPassthrough &&
+            state.stylusButtonScheme != StylusButtonScheme.Disabled
+        ) {
+            canvasView.requestStylusKeyFocus()
+        } else {
+            canvasView.clearFocus()
+        }
     }
 
     private fun applyToolbarPosition(params: LayoutParams, state: ServiceState) {

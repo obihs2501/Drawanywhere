@@ -87,11 +87,15 @@ data class UiState(
     val secondDrawerButtons: Set<String> = setOf(
         "passthrough", "redo", "minimize", "settings"
     ),
-    val secondDrawerPinnedButtons: Set<String> = emptySet()
+    val secondDrawerPinnedButtons: List<String> = defaultQuickLaunchActions()
 ) {
     val currentPenConfig: PenConfig
         get() = penConfigs[currentPenType] ?: PenConfig()
 }
+
+fun defaultQuickLaunchActions(): List<String> = listOf(
+    "redo", "visibility", "passthrough", "save", "orientation", "settings", "quit"
+)
 
 fun defaultPenConfigs(): Map<PenType, PenConfig> = PenType.entries.associateWith { type ->
     if (type.isEraser) {
@@ -217,20 +221,17 @@ class DrawViewModel(
 
     fun setCanvasVisibility(visible: Boolean) {
         var currentPassthrough = uiState.value.canvasPassthrough
-        var currentPinned = uiState.value.secondDrawerPinnedButtons
 
         if (uiState.value.autoClearCanvas && !visible) {
             clearCanvas()
             currentPassthrough = false
-            currentPinned = getPinSecondDrawerButtonResult("passthrough", false)
         }
 
         val currentFirstOpen = uiState.value.firstDrawerOpen
         _uiState.update { it.copy(
             canvasVisible = visible,
             canvasPassthrough = currentPassthrough,
-            firstDrawerOpen = !currentFirstOpen,
-            secondDrawerPinnedButtons = currentPinned
+            firstDrawerOpen = !currentFirstOpen
         ) }
     }
 
@@ -238,8 +239,7 @@ class DrawViewModel(
         setCanvasPassthrough(!uiState.value.canvasPassthrough)
 
     fun setCanvasPassthrough(passthrough: Boolean) {
-        val newPinned = getPinSecondDrawerButtonResult("passthrough", passthrough)
-        _uiState.update { it.copy(canvasPassthrough = passthrough, secondDrawerPinnedButtons = newPinned) }
+        _uiState.update { it.copy(canvasPassthrough = passthrough) }
     }
 
     fun setPenColor(color: Color, trackRecent: Boolean = true) {
@@ -417,18 +417,22 @@ class DrawViewModel(
     fun setSecondDrawerOpen(state: Boolean) =
         _uiState.update { it.copy(secondDrawerOpen = state) }
 
-    fun toggleSecondDrawerPinned(id: String) {
-        val currentPinned = uiState.value.secondDrawerPinnedButtons
-        pinSecondDrawerButton(id, !currentPinned.contains(id))
+    fun setQuickLaunchActionOrder(actionIds: List<String>) =
+        _uiState.update { it.copy(secondDrawerPinnedButtons = normalizeQuickLaunchActionOrder(actionIds)) }
+
+    fun moveQuickLaunchAction(fromIndex: Int, toIndex: Int) {
+        val current = uiState.value.secondDrawerPinnedButtons
+        if (fromIndex !in current.indices || toIndex !in current.indices || fromIndex == toIndex) return
+        val reordered = current.toMutableList().apply {
+            val moved = removeAt(fromIndex)
+            add(toIndex, moved)
+        }
+        setQuickLaunchActionOrder(reordered)
     }
 
-    fun pinSecondDrawerButton(id: String, pinned: Boolean) =
-        _uiState.update { it.copy(secondDrawerPinnedButtons = getPinSecondDrawerButtonResult(id, pinned)) }
-
-    private fun getPinSecondDrawerButtonResult(id: String, pinned: Boolean): Set<String> {
-        val currentPinned = uiState.value.secondDrawerPinnedButtons
-        if (currentPinned.contains(id) == pinned) return currentPinned
-        return if (pinned) currentPinned + id else currentPinned - id
+    private fun normalizeQuickLaunchActionOrder(actionIds: List<String>): List<String> {
+        val distinct = actionIds.map(String::trim).filter(String::isNotEmpty).distinct()
+        return if (distinct.isEmpty()) defaultQuickLaunchActions() else distinct
     }
 
     fun setAutoClearCanvas(state: Boolean) =

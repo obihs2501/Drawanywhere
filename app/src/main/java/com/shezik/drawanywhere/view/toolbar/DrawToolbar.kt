@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.CropSquare
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DoNotTouch
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.LineWeight
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.SaveAlt
@@ -67,7 +69,9 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
@@ -78,6 +82,7 @@ import com.shezik.drawanywhere.model.PenConfig
 import com.shezik.drawanywhere.model.PenType
 import com.shezik.drawanywhere.ui.theme.DrawAnywhereTheme
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.ColorPalette
@@ -201,8 +206,8 @@ fun DrawToolbar(
                                 onOpenWidthPopup = { widthPopupFor = it },
                             )
                         }
-                        val actions: @Composable () -> Unit = {
-                            ToolbarActionSegment(
+                        val utilities: @Composable () -> Unit = {
+                            ToolbarUtilitySegment(
                                 canRedo = canRedo,
                                 onRedo = onRedo,
                                 canvasVisible = uiState.canvasVisible,
@@ -215,20 +220,23 @@ fun DrawToolbar(
                                 onOpenSettings = onOpenSettings,
                                 onQuit = onQuit,
                                 onToggleOrientation = viewModel::toggleToolbarOrientation,
-                                vertical = uiState.toolbarOrientation == ToolbarOrientation.VERTICAL,
+                                quickLaunchActionIds = uiState.secondDrawerPinnedButtons,
+                                onSetQuickLaunchActionOrder = viewModel::setQuickLaunchActionOrder,
                             )
                         }
                         if (uiState.toolbarOrientation == ToolbarOrientation.VERTICAL) {
                             Column(
                                 modifier = Modifier
                                     .onSizeChanged { expandedWidthPx = it.width }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    .padding(horizontal = 6.dp, vertical = 6.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(7.dp),
                             ) {
                                 MainToolColumn(uiState = uiState, onSelectMainTool = selectMainTool)
-                                HorizontalSeparator()
+                                HorizontalSeparator(width = 58.dp)
                                 detail(true)
+                                HorizontalSeparator(width = 58.dp)
+                                utilities()
                                 DragCollapseHandle(
                                     haptics = haptics,
                                     onPositionChange = viewModel::updateToolbarPosition,
@@ -236,33 +244,27 @@ fun DrawToolbar(
                                     onTap = { viewModel.setToolbarMinimized(true) },
                                     compact = true,
                                 )
-                                HorizontalSeparator()
-                                actions()
                             }
                         } else {
-                            Column(
+                            Row(
                                 modifier = Modifier
                                     .onSizeChanged { expandedWidthPx = it.width }
-                                    .padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    .padding(start = 6.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    MainToolRow(uiState = uiState, onSelectMainTool = selectMainTool)
-                                    VerticalSeparator()
-                                    detail(false)
-                                    DragCollapseHandle(
-                                        haptics = haptics,
-                                        onPositionChange = viewModel::updateToolbarPosition,
-                                        onPositionSaved = viewModel::saveToolbarPosition,
-                                        onTap = { viewModel.setToolbarMinimized(true) },
-                                    )
-                                }
-                                HorizontalSeparator(width = 260)
-                                actions()
+                                MainToolRow(uiState = uiState, onSelectMainTool = selectMainTool)
+                                VerticalSeparator(height = 42.dp)
+                                detail(false)
+                                VerticalSeparator(height = 42.dp)
+                                utilities()
+                                VerticalSeparator(height = 42.dp)
+                                DragCollapseHandle(
+                                    haptics = haptics,
+                                    onPositionChange = viewModel::updateToolbarPosition,
+                                    onPositionSaved = viewModel::saveToolbarPosition,
+                                    onTap = { viewModel.setToolbarMinimized(true) },
+                                )
                             }
                         }
                     }
@@ -367,8 +369,20 @@ private fun CollapsedToolbar(
     }
 }
 
+private const val MAX_QUICK_ACTIONS = 3
+
+private data class UtilityActionSpec(
+    val id: String,
+    val icon: ImageVector,
+    val label: String,
+    val selected: Boolean = false,
+    val enabled: Boolean = true,
+    val danger: Boolean = false,
+    val onClick: () -> Unit,
+)
+
 @Composable
-private fun ToolbarActionSegment(
+private fun ToolbarUtilitySegment(
     canRedo: Boolean,
     onRedo: () -> Unit,
     canvasVisible: Boolean,
@@ -381,118 +395,493 @@ private fun ToolbarActionSegment(
     onOpenSettings: () -> Unit,
     onQuit: () -> Unit,
     onToggleOrientation: () -> Unit,
-    vertical: Boolean,
+    quickLaunchActionIds: List<String>,
+    onSetQuickLaunchActionOrder: (List<String>) -> Unit,
 ) {
     var saveMenuExpanded by remember { mutableStateOf(false) }
+    var launcherExpanded by remember { mutableStateOf(false) }
     val passiveBg = MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
     val activeBg = MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
     val iconColor = MiuixTheme.colorScheme.onSurfaceContainer.copy(alpha = 0.88f)
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        val primaryActions: @Composable () -> Unit = {
-            CompactActionButton(
-                icon = Icons.AutoMirrored.Filled.Redo,
-                contentDescription = stringResource(R.string.redo),
-                enabled = canRedo,
-                backgroundColor = passiveBg,
-                tint = if (canRedo) iconColor else iconColor.copy(alpha = 0.34f),
-                onClick = onRedo,
-            )
-            CompactActionButton(
-                icon = Icons.Default.SaveAlt,
-                contentDescription = stringResource(R.string.save_drawing),
-                selected = saveMenuExpanded,
-                backgroundColor = if (saveMenuExpanded) activeBg else passiveBg,
-                tint = if (saveMenuExpanded) MiuixTheme.colorScheme.onPrimaryContainer else iconColor,
-                onClick = { saveMenuExpanded = !saveMenuExpanded },
-            )
-            CompactActionButton(
-                icon = Icons.Default.Settings,
-                contentDescription = stringResource(R.string.settings),
-                backgroundColor = passiveBg,
-                tint = iconColor,
-                onClick = onOpenSettings,
-            )
-        }
-        val secondaryActions: @Composable () -> Unit = {
-            CompactActionButton(
-                icon = Icons.Default.ScreenRotation,
-                contentDescription = stringResource(R.string.toggle_toolbar_orientation),
-                backgroundColor = passiveBg,
-                tint = iconColor,
-                onClick = onToggleOrientation,
-            )
-            CompactActionButton(
-                icon = if (canvasVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                contentDescription = if (canvasVisible) {
-                    stringResource(R.string.hide_canvas)
-                } else {
-                    stringResource(R.string.show_canvas)
-                },
-                selected = !canvasVisible,
-                backgroundColor = if (canvasVisible) passiveBg else activeBg,
-                tint = if (canvasVisible) iconColor else MiuixTheme.colorScheme.onPrimaryContainer,
-                onClick = onToggleCanvasVisibility,
-            )
-            CompactActionButton(
-                icon = if (passthroughEnabled) Icons.Default.DoNotTouch else Icons.Default.TouchApp,
-                contentDescription = if (passthroughEnabled) {
-                    stringResource(R.string.disable_passthrough)
-                } else {
-                    stringResource(R.string.enable_passthrough)
-                },
-                selected = passthroughEnabled,
-                backgroundColor = if (passthroughEnabled) activeBg else passiveBg,
-                tint = if (passthroughEnabled) MiuixTheme.colorScheme.onPrimaryContainer else iconColor,
-                onClick = onTogglePassthrough,
-            )
-            CompactActionButton(
-                icon = Icons.Default.Close,
-                contentDescription = stringResource(R.string.quit),
-                backgroundColor = passiveBg.copy(alpha = 0.18f),
-                tint = iconColor.copy(alpha = 0.76f),
-                onClick = onQuit,
-            )
-        }
-
-        Column(
-            modifier = Modifier
-                .clip(RoundedCornerShape(14.dp))
-                .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.20f))
-                .padding(3.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (vertical) {
-                primaryActions()
-                HorizontalSeparator()
-                secondaryActions()
+    val popupAlignment = Alignment.TopCenter
+    val popupOffset = IntOffset(0, -66)
+    val actions = listOf(
+        UtilityActionSpec(
+            id = "redo",
+            icon = Icons.AutoMirrored.Filled.Redo,
+            label = stringResource(R.string.redo),
+            enabled = canRedo,
+            onClick = onRedo,
+        ),
+        UtilityActionSpec(
+            id = "save",
+            icon = Icons.Default.SaveAlt,
+            label = stringResource(R.string.save_drawing),
+            selected = saveMenuExpanded,
+            onClick = {
+                saveMenuExpanded = !saveMenuExpanded
+                launcherExpanded = false
+            },
+        ),
+        UtilityActionSpec(
+            id = "visibility",
+            icon = if (canvasVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+            label = if (canvasVisible) stringResource(R.string.hide_canvas) else stringResource(R.string.show_canvas),
+            selected = !canvasVisible,
+            onClick = {
+                saveMenuExpanded = false
+                launcherExpanded = false
+                onToggleCanvasVisibility()
+            },
+        ),
+        UtilityActionSpec(
+            id = "passthrough",
+            icon = if (passthroughEnabled) Icons.Default.DoNotTouch else Icons.Default.TouchApp,
+            label = if (passthroughEnabled) {
+                stringResource(R.string.disable_passthrough)
             } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    primaryActions()
-                    secondaryActions()
-                }
-            }
-        }
+                stringResource(R.string.enable_passthrough)
+            },
+            selected = passthroughEnabled,
+            onClick = {
+                saveMenuExpanded = false
+                launcherExpanded = false
+                onTogglePassthrough()
+            },
+        ),
+        UtilityActionSpec(
+            id = "orientation",
+            icon = Icons.Default.ScreenRotation,
+            label = stringResource(R.string.toggle_toolbar_orientation),
+            onClick = {
+                saveMenuExpanded = false
+                launcherExpanded = false
+                onToggleOrientation()
+            },
+        ),
+        UtilityActionSpec(
+            id = "settings",
+            icon = Icons.Default.Settings,
+            label = stringResource(R.string.settings),
+            onClick = {
+                saveMenuExpanded = false
+                launcherExpanded = false
+                onOpenSettings()
+            },
+        ),
+        UtilityActionSpec(
+            id = "quit",
+            icon = Icons.Default.Close,
+            label = stringResource(R.string.quit),
+            danger = true,
+            onClick = {
+                saveMenuExpanded = false
+                launcherExpanded = false
+                onQuit()
+            },
+        ),
+    )
+    val actionMap = actions.associateBy(UtilityActionSpec::id)
+    val orderedActionIds = remember(quickLaunchActionIds, saveMenuExpanded, canvasVisible, passthroughEnabled, canRedo) {
+        val normalized = quickLaunchActionIds.distinct().filter { actionMap.containsKey(it) }
+        normalized + actions.map(UtilityActionSpec::id).filterNot(normalized::contains)
+    }
+    val orderedActions = remember(orderedActionIds, saveMenuExpanded, canvasVisible, passthroughEnabled, canRedo) {
+        orderedActionIds.mapNotNull(actionMap::get)
+    }
+    val visibleQuickActions = remember(orderedActions) {
+        orderedActions.take(MAX_QUICK_ACTIONS)
+    }
+
+    Box(
+        contentAlignment = Alignment.Center,
+    ) {
+        val dockModifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.20f))
+            .padding(horizontal = 4.dp, vertical = 3.dp)
+        QuickLaunchDock(
+            actions = visibleQuickActions,
+            launcherExpanded = launcherExpanded,
+            passiveBg = passiveBg,
+            activeBg = activeBg,
+            iconColor = iconColor,
+            modifier = dockModifier,
+            onOpenLauncher = {
+                launcherExpanded = true
+                saveMenuExpanded = false
+            },
+        )
 
         if (saveMenuExpanded) {
-            SaveMenuCard(
-                onSaveTransparent = {
-                    saveMenuExpanded = false
-                    onSaveTransparent()
+            ToolbarMenuPopup(
+                alignment = popupAlignment,
+                offset = popupOffset,
+                onDismiss = { saveMenuExpanded = false },
+            ) {
+                SaveMenuCard(
+                    onSaveTransparent = {
+                        saveMenuExpanded = false
+                        onSaveTransparent()
+                    },
+                    onSaveWithBackdrop = {
+                        saveMenuExpanded = false
+                        onSaveWithBackdrop()
+                    },
+                    onSaveWithScreenBackdrop = {
+                        saveMenuExpanded = false
+                        onSaveWithScreenBackdrop()
+                    },
+                )
+            }
+        }
+    }
+
+    if (launcherExpanded) {
+        ToolbarMenuPopup(
+            alignment = popupAlignment,
+            offset = IntOffset(0, -20),
+            onDismiss = { launcherExpanded = false },
+        ) {
+            QuickLaunchMenuCard(
+                actions = orderedActions,
+                onActionClick = { action ->
+                    launcherExpanded = false
+                    actionMap[action]?.onClick?.invoke()
                 },
-                onSaveWithBackdrop = {
-                    saveMenuExpanded = false
-                    onSaveWithBackdrop()
-                },
-                onSaveWithScreenBackdrop = {
-                    saveMenuExpanded = false
-                    onSaveWithScreenBackdrop()
-                },
+                onActionOrderChange = onSetQuickLaunchActionOrder,
             )
+        }
+    }
+}
+
+@Composable
+private fun QuickLaunchDock(
+    actions: List<UtilityActionSpec>,
+    launcherExpanded: Boolean,
+    passiveBg: Color,
+    activeBg: Color,
+    iconColor: Color,
+    modifier: Modifier,
+    onOpenLauncher: () -> Unit,
+) {
+    val actionSlots = actions.take(MAX_QUICK_ACTIONS) + List((MAX_QUICK_ACTIONS - actions.size).coerceAtLeast(0)) { null }
+    val launcher: @Composable () -> Unit = {
+        FixedQuickActionButton(
+            icon = Icons.Default.Tune,
+            contentDescription = stringResource(R.string.quick_launch_actions),
+            selected = launcherExpanded,
+            backgroundColor = if (launcherExpanded) activeBg else passiveBg,
+            tint = if (launcherExpanded) MiuixTheme.colorScheme.onPrimaryContainer else iconColor,
+            onClick = onOpenLauncher,
+        )
+    }
+    val slot: @Composable (UtilityActionSpec?) -> Unit = { action ->
+        if (action == null) {
+            Spacer(modifier = Modifier.size(30.dp))
+        } else {
+            QuickLaunchButton(
+                action = action,
+                passiveBg = passiveBg,
+                activeBg = activeBg,
+                iconColor = iconColor,
+            )
+        }
+    }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            slot(actionSlots.getOrNull(0))
+            slot(actionSlots.getOrNull(1))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            slot(actionSlots.getOrNull(2))
+            launcher()
+        }
+    }
+}
+
+@Composable
+private fun ToolbarMenuPopup(
+    alignment: Alignment,
+    offset: IntOffset,
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Popup(
+        alignment = alignment,
+        offset = offset,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun QuickLaunchButton(
+    action: UtilityActionSpec,
+    passiveBg: Color,
+    activeBg: Color,
+    iconColor: Color,
+) {
+    FixedQuickActionButton(
+        icon = action.icon,
+        contentDescription = action.label,
+        selected = action.selected,
+        enabled = action.enabled,
+        backgroundColor = when {
+            action.selected -> activeBg
+            action.danger -> passiveBg.copy(alpha = 0.18f)
+            else -> passiveBg
+        },
+        tint = when {
+            !action.enabled -> iconColor.copy(alpha = 0.34f)
+            action.selected -> MiuixTheme.colorScheme.onPrimaryContainer
+            action.danger -> Color(0xFFD96C6C)
+            else -> iconColor
+        },
+        onClick = action.onClick,
+    )
+}
+
+@Composable
+private fun FixedQuickActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    backgroundColor: Color,
+    tint: Color,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    selected: Boolean = false,
+) {
+    Box(
+        modifier = Modifier.size(30.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        MiuixIconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier.fillMaxSize(),
+            backgroundColor = backgroundColor,
+            holdDownState = selected,
+            cornerRadius = 11.dp,
+            minWidth = 30.dp,
+            minHeight = 30.dp,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = tint,
+                modifier = Modifier.size(17.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuickLaunchMenuCard(
+    actions: List<UtilityActionSpec>,
+    onActionClick: (String) -> Unit,
+    onActionOrderChange: (List<String>) -> Unit,
+) {
+    var orderedActions by remember(actions) { mutableStateOf(actions) }
+    var draggingActionId by remember { mutableStateOf<String?>(null) }
+    var draggingOffsetY by remember { mutableFloatStateOf(0f) }
+    val rowHeightPx = with(LocalDensity.current) { 34.dp.toPx() }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.94f),
+        contentColor = MiuixTheme.colorScheme.onSurfaceContainer,
+        shadowElevation = 6.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .width(220.dp)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.quick_launch_actions),
+                style = MiuixTheme.textStyles.subtitle,
+                color = MiuixTheme.colorScheme.onSurfaceContainer,
+            )
+            orderedActions.forEachIndexed { index, action ->
+                QuickLaunchMenuItem(
+                    action = action,
+                    currentIndex = index,
+                    itemCount = orderedActions.size,
+                    rank = index + 1,
+                    showing = index < MAX_QUICK_ACTIONS,
+                    dragging = draggingActionId == action.id,
+                    dragOffsetY = if (draggingActionId == action.id) draggingOffsetY else 0f,
+                    onActionClick = { onActionClick(action.id) },
+                    onDragStart = {
+                        draggingActionId = action.id
+                        draggingOffsetY = 0f
+                    },
+                    onDrag = { deltaY ->
+                        draggingOffsetY += deltaY
+                        val from = orderedActions.indexOfFirst { it.id == action.id }
+                        if (from == -1) return@QuickLaunchMenuItem
+                        val target = (from + (draggingOffsetY / rowHeightPx).roundToInt())
+                            .coerceIn(0, orderedActions.lastIndex)
+                        if (target != from) {
+                            draggingOffsetY -= (target - from) * rowHeightPx
+                            orderedActions = orderedActions.toMutableList().apply {
+                                add(target, removeAt(from))
+                            }
+                            onActionOrderChange(orderedActions.map(UtilityActionSpec::id))
+                        }
+                    },
+                    onDragEnd = {
+                        draggingActionId = null
+                        draggingOffsetY = 0f
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickLaunchMenuItem(
+    action: UtilityActionSpec,
+    currentIndex: Int,
+    itemCount: Int,
+    rank: Int,
+    showing: Boolean,
+    dragging: Boolean,
+    dragOffsetY: Float,
+    onActionClick: () -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(34.dp)
+            .offset { IntOffset(0, if (dragging) dragOffsetY.roundToInt() else 0) }
+            .zIndex(if (dragging) 1f else 0f)
+            .graphicsLayer {
+                alpha = if (dragging) 0.92f else 1f
+                scaleX = if (dragging) 1.01f else 1f
+                scaleY = if (dragging) 1.01f else 1f
+            }
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (showing) MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.18f)
+                else Color.Transparent
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        QuickLaunchRankBadge(rank = rank, showing = showing)
+        Surface(
+            onClick = onActionClick,
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(10.dp),
+            color = Color.Transparent,
+            contentColor = if (action.danger) Color(0xFFD96C6C) else MiuixTheme.colorScheme.onSurfaceContainer,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = action.icon,
+                    contentDescription = action.label,
+                    tint = if (action.danger) Color(0xFFD96C6C) else MiuixTheme.colorScheme.onSurfaceContainer,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = action.label,
+                    color = if (action.danger) Color(0xFFD96C6C) else MiuixTheme.colorScheme.onSurfaceContainer,
+                    style = MiuixTheme.textStyles.body2,
+                )
+            }
+        }
+        DragHandle(
+            dragging = dragging,
+            currentIndex = currentIndex,
+            itemCount = itemCount,
+            onDragStart = onDragStart,
+            onDrag = onDrag,
+            onDragEnd = onDragEnd,
+        )
+    }
+}
+
+@Composable
+private fun QuickLaunchRankBadge(
+    rank: Int,
+    showing: Boolean,
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = if (showing) MiuixTheme.colorScheme.primaryContainer else MiuixTheme.colorScheme.surfaceContainer,
+        contentColor = if (showing) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurfaceContainer,
+    ) {
+        Text(
+            text = rank.toString(),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+            color = if (showing) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurfaceContainer,
+            style = MiuixTheme.textStyles.body2,
+        )
+    }
+}
+
+@Composable
+private fun DragHandle(
+    dragging: Boolean,
+    currentIndex: Int,
+    itemCount: Int,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .size(width = 28.dp, height = 34.dp)
+            .pointerInput(itemCount, currentIndex) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { onDragStart() },
+                    onDragCancel = onDragEnd,
+                    onDragEnd = onDragEnd,
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        if (dragAmount.y != 0f) {
+                            onDrag(dragAmount.y)
+                        }
+                    },
+                )
+            },
+        shape = RoundedCornerShape(10.dp),
+        color = if (dragging) MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.88f)
+        else MiuixTheme.colorScheme.surfaceContainer,
+        contentColor = if (dragging) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurfaceContainer,
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                repeat(3) {
+                    Box(
+                        modifier = Modifier
+                            .width(10.dp)
+                            .height(2.dp)
+                            .background(
+                                if (dragging) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurfaceContainer.copy(alpha = 0.72f),
+                                RoundedCornerShape(50)
+                            )
+                    )
+                }
+            }
         }
     }
 }
@@ -551,18 +940,18 @@ private fun CompactActionButton(
     MiuixIconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.size(34.dp),
+        modifier = Modifier.size(30.dp),
         backgroundColor = backgroundColor,
         holdDownState = selected,
-        cornerRadius = 13.dp,
-        minWidth = 34.dp,
-        minHeight = 34.dp,
+        cornerRadius = 11.dp,
+        minWidth = 30.dp,
+        minHeight = 30.dp,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = tint,
-            modifier = Modifier.size(19.dp),
+            modifier = Modifier.size(17.dp),
         )
     }
 }
@@ -574,8 +963,8 @@ private fun MainToolRow(
 ) {
     val selectedMainTool = mainToolForPenType(uiState.currentPenType)
     Row(
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         listOf(MainTool.Pen, MainTool.Eraser, MainTool.Shape, MainTool.Laser).forEach { tool ->
             MainToolButton(
@@ -626,20 +1015,20 @@ private fun MainToolButton(
     val width = when {
         compact -> 30.dp
         vertical -> 58.dp
-        else -> 28.dp
+        else -> 34.dp
     }
     val height = when {
         compact -> 48.dp
         vertical -> 28.dp
-        else -> 58.dp
+        else -> 28.dp
     }
     val lift by animateFloatAsState(
-        targetValue = if (selected && !compact) -10f else 0f,
+        targetValue = if (selected && !compact) -6f else 0f,
         animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
         label = "tool_lift",
     )
     val scale by animateFloatAsState(
-        targetValue = if (selected) 1.16f else 1f,
+        targetValue = if (selected) 1.08f else 1f,
         animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
         label = "tool_scale",
     )
@@ -650,11 +1039,7 @@ private fun MainToolButton(
             .width(width)
             .height(height)
             .graphicsLayer {
-                if (vertical) {
-                    translationX = with(density) { lift.dp.toPx() }
-                } else {
-                    translationY = with(density) { lift.dp.toPx() }
-                }
+                translationY = with(density) { lift.dp.toPx() }
                 scaleX = scale
                 scaleY = scale
             },
@@ -679,7 +1064,7 @@ private fun MainToolButton(
                     imageVector = tool.icon,
                     contentDescription = stringResource(tool.labelRes()),
                     tint = tint,
-                    modifier = Modifier.size(if (compact) 20.dp else 22.dp),
+                    modifier = Modifier.size(if (compact) 20.dp else 20.dp),
                 )
             }
         }
@@ -806,11 +1191,12 @@ private fun EraserArea(
     onOpenWidthPopup: (MainTool) -> Unit,
 ) {
     val content: @Composable () -> Unit = {
-        VerticalIconChoices(
+        ToolModeChoices(
             items = listOf(
                 IconChoice(InkEraser24Px, currentPenType == PenType.StrokeEraser, stringResource(R.string.stroke_eraser), onStrokeEraserSelected),
                 IconChoice(Icons.Default.BlurOn, currentPenType == PenType.PixelEraser, stringResource(R.string.pixel_eraser), onPixelEraserSelected),
-            )
+            ),
+            horizontal = vertical,
         )
         ClearCanvasButton(vertical = vertical, onClick = onClearCanvas)
         WidthChoices(
@@ -874,11 +1260,12 @@ private fun ShapeArea(
     onOpenWidthPopup: (MainTool) -> Unit,
 ) {
     val content: @Composable () -> Unit = {
-        VerticalIconChoices(
+        ToolModeChoices(
             items = listOf(
                 IconChoice(Icons.Default.CropSquare, currentPenType == PenType.Rectangle, stringResource(R.string.rectangle), onRectangleSelected),
                 IconChoice(Icons.Default.RadioButtonUnchecked, currentPenType == PenType.Ellipse, stringResource(R.string.ellipse), onEllipseSelected),
-            )
+            ),
+            horizontal = vertical,
         )
         ColorGrid(
             selectedColor = selectedColor,
@@ -915,12 +1302,15 @@ private data class IconChoice(
 )
 
 @Composable
-private fun VerticalIconChoices(items: List<IconChoice>) {
+private fun ToolModeChoices(
+    items: List<IconChoice>,
+    horizontal: Boolean,
+) {
     val defaultTint = MiuixTheme.colorScheme.onSurfaceContainer
     val selectedColor = MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
     val selectedBorder = MiuixTheme.colorScheme.primary.copy(alpha = 0.64f)
     val normalBorder = MiuixTheme.colorScheme.outline.copy(alpha = 0.42f)
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    val content: @Composable () -> Unit = {
         items.forEach { item ->
             val tint = if (item.tint == Color.Unspecified) defaultTint else item.tint
             Surface(
@@ -944,6 +1334,11 @@ private fun VerticalIconChoices(items: List<IconChoice>) {
                 }
             }
         }
+    }
+    if (horizontal) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { content() }
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { content() }
     }
 }
 
@@ -1008,7 +1403,7 @@ private fun WidthChoices(
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Surface(
                     onClick = { onSelected(mm) },
-                    modifier = Modifier.size(28.dp),
+                    modifier = Modifier.size(24.dp),
                     shape = CircleShape,
                     color = Color.Transparent,
                     border = BorderStroke(
@@ -1019,7 +1414,7 @@ private fun WidthChoices(
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Box(
                             modifier = Modifier
-                                .size((mm * 7f).coerceIn(3f, 10f).dp)
+                                .size((mm * 6.2f).coerceIn(3f, 8.5f).dp)
                                 .clip(CircleShape)
                                 .background(Color(0xFF1A94FF))
                         )
@@ -1037,7 +1432,7 @@ private fun WidthChoices(
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
             widthButtons()
             SmallActionButton(
-                icon = Icons.Default.Tune,
+                icon = Icons.Default.LineWeight,
                 contentDescription = stringResource(R.string.width),
                 onClick = onMoreClick,
             )
@@ -1046,7 +1441,7 @@ private fun WidthChoices(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             widthButtons()
             SmallActionButton(
-                icon = Icons.Default.Tune,
+                icon = Icons.Default.LineWeight,
                 contentDescription = stringResource(R.string.width),
                 onClick = onMoreClick,
             )
@@ -1062,7 +1457,7 @@ private fun ColorCell(
 ) {
     Surface(
         onClick = onClick,
-        modifier = Modifier.size(width = 22.dp, height = 20.dp),
+        modifier = Modifier.size(width = 20.dp, height = 18.dp),
         shape = RoundedCornerShape(5.dp),
         color = color,
         contentColor = readableContentColor(color),
@@ -1089,36 +1484,36 @@ private fun SmallActionButton(
 ) {
     MiuixIconButton(
         onClick = onClick,
-        modifier = Modifier.size(28.dp),
+        modifier = Modifier.size(26.dp),
         backgroundColor = Color.Transparent,
         cornerRadius = 10.dp,
-        minWidth = 28.dp,
-        minHeight = 28.dp,
+        minWidth = 26.dp,
+        minHeight = 26.dp,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = MiuixTheme.colorScheme.onBackground.copy(alpha = 0.86f),
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(15.dp),
         )
     }
 }
 
 @Composable
-private fun VerticalSeparator() {
+private fun VerticalSeparator(height: Dp = 64.dp) {
     Box(
         modifier = Modifier
-            .height(64.dp)
+            .height(height)
             .width(1.dp)
             .background(MiuixTheme.colorScheme.outline.copy(alpha = 0.26f))
     )
 }
 
 @Composable
-private fun HorizontalSeparator(width: Int = 74) {
+private fun HorizontalSeparator(width: Dp = 74.dp) {
     Box(
         modifier = Modifier
-            .width(width.dp)
+            .width(width)
             .height(1.dp)
             .background(MiuixTheme.colorScheme.outline.copy(alpha = 0.26f))
     )
@@ -1131,11 +1526,12 @@ private fun DragCollapseHandle(
     onPositionSaved: () -> Unit,
     onTap: () -> Unit,
     compact: Boolean = false,
+    horizontalGrip: Boolean = false,
 ) {
     Surface(
         modifier = Modifier
-            .width(22.dp)
-            .height(if (compact) 52.dp else 74.dp)
+            .width(if (horizontalGrip) 44.dp else 20.dp)
+            .height(if (horizontalGrip) 20.dp else 44.dp)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: return@awaitEachGesture
@@ -1165,23 +1561,36 @@ private fun DragCollapseHandle(
                     }
                 }
             },
-        shape = RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp),
+        shape = RoundedCornerShape(12.dp),
         color = Color.Transparent,
         contentColor = MiuixTheme.colorScheme.onBackground,
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 3.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                repeat(if (compact) 5 else 7) {
-                    Box(
-                        modifier = Modifier
-                            .width(14.dp)
-                            .height(2.dp)
-                            .background(MiuixTheme.colorScheme.onBackground.copy(alpha = 0.62f), RoundedCornerShape(50))
-                            .offset(x = 2.dp)
-                    )
+            if (horizontalGrip) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    repeat(if (compact) 4 else 5) {
+                        Box(
+                            modifier = Modifier
+                                .width(2.dp)
+                                .height(12.dp)
+                                .background(MiuixTheme.colorScheme.onBackground.copy(alpha = 0.62f), RoundedCornerShape(50))
+                        )
+                    }
+                }
+            } else {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    repeat(if (compact) 4 else 5) {
+                        Box(
+                            modifier = Modifier
+                                .width(12.dp)
+                                .height(2.dp)
+                                .background(MiuixTheme.colorScheme.onBackground.copy(alpha = 0.62f), RoundedCornerShape(50))
+                                .offset(x = 1.dp)
+                        )
+                    }
                 }
             }
         }
