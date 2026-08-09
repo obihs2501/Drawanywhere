@@ -425,7 +425,7 @@ private fun ToolbarUtilitySegment(
         ),
         UtilityActionSpec(
             id = "visibility",
-            icon = if (canvasVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+            icon = if (canvasVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
             label = if (canvasVisible) stringResource(R.string.hide_canvas) else stringResource(R.string.show_canvas),
             selected = !canvasVisible,
             onClick = {

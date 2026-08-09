@@ -229,7 +229,10 @@ class MainService : Service() {
             viewModel.uiState.collect { state ->
                 applyCanvasInputMode(canvasParams, state)
                 windowManager.updateViewLayout(canvasView, canvasParams)
-                canvasView.visibility = if (state.canvasVisible) View.VISIBLE else View.GONE
+                // Keep the window visible (but drawing nothing) while the canvas is
+                // hidden. Setting the root view to View.GONE would make the window
+                // transparent to touches even though passthrough is off.
+                canvasView.canvasHidden = !state.canvasVisible
                 updateToolbarWindowLayout(toolbarParams)
                 updateToolbarAlpha()
                 syncCanvasKeyFocus(state)

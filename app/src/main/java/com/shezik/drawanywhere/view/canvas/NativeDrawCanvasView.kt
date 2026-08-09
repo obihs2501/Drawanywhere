@@ -44,6 +44,20 @@ class NativeDrawCanvasView(
         isFocusableInTouchMode = true
     }
 
+    /**
+     * Whether the canvas should be hidden (draw nothing) while the window
+     * stays visible and touchable. Keeping the root view VISIBLE is what
+     * prevents touches from falling through to apps below; setting it to
+     * View.GONE would make WindowManager drop the window from touch dispatch,
+     * which is equivalent to passthrough even when the passthrough option is off.
+     */
+    var canvasHidden: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
+
     companion object {
         private const val FRAME_INTERVAL_MS = 16L          // ~60fps
         private const val HUD_MARGIN_DP = 24f
@@ -77,16 +91,22 @@ class NativeDrawCanvasView(
         fingerDrawingEnabled = { viewModel.uiState.value.fingerDrawingEnabled },
     )
 
-    override fun onTouchEvent(event: MotionEvent): Boolean =
-        touchHandler.handleEvent(event)
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (canvasHidden) return false
+        return touchHandler.handleEvent(event)
+    }
 
     // ── Hover (stylus/mouse size preview) ──────────────────────
 
-    override fun onHoverEvent(event: MotionEvent): Boolean =
-        touchHandler.handleEvent(event)
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        if (canvasHidden) return false
+        return touchHandler.handleEvent(event)
+    }
 
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean =
-        touchHandler.handleEvent(event)
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (canvasHidden) return false
+        return touchHandler.handleEvent(event)
+    }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         return handleXiaomiStylusKey(event) || super.dispatchKeyEvent(event)
@@ -154,6 +174,8 @@ class NativeDrawCanvasView(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+
+        if (canvasHidden) return
 
         val vp = viewModel.viewport.value
 
