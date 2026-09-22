@@ -27,8 +27,21 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # ubuntu-latest ships the Android SDK (ANDROID_SDK_ROOT). Do NOT use
+      # android-actions/setup-android here: it tries to install the removed
+      # legacy 'tools' package and fails with "Failed to find package 'tools'".
+      - name: Accept Android SDK licenses
+        run: |
+          SDKMANAGER="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}" -type f -name sdkmanager 2>/dev/null | head -n 1)"
+          if [ -n "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          fi
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+
+      - name: Show toolchain versions
+        run: |
+          java -version
+          ./gradlew --version
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
