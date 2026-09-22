@@ -183,21 +183,6 @@ class FocusPenSystemLink(
         enable(mode)
     }
 
-    /** Re-issues setEnable(touchFilm, 1) on the live connection, for the diagnostics page. */
-    fun resendEnable() {
-        when (activeMode) {
-            FocusPenLinkMode.Direct -> {
-                val result = directClient.resendEnable()
-                _state.value = _state.value.copy(enableResult = result ?: _state.value.enableResult)
-            }
-            FocusPenLinkMode.Sdk -> {
-                sdkEnableRecorded = false
-                sdkEnableAttempts = 0
-                refreshSdkConnection()
-            }
-            null -> DiagnosticLog.log(TAG, "resendEnable ignored: link inactive")
-        }
-    }
 
     private fun isTouchServiceInstalled(): Boolean =
         try {

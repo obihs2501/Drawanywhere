@@ -84,8 +84,6 @@ data class UiState(
     val rootScreenshotEnabled: Boolean = false,
     /** Which handshake implementation claims the Focus Pen gesture stream. */
     val focusPenLinkMode: FocusPenLinkMode = FocusPenLinkMode.Direct,
-    /** Transient: keep the handshake alive even while the canvas is hidden/passthrough (test page). */
-    val focusPenLinkForced: Boolean = false,
     val pressureEraserEnabled: Boolean = false,
     val pressureEraserThreshold: Float = 0.85f,
     val recentColors: List<Color> = emptyList(),
@@ -166,9 +164,6 @@ class DrawViewModel(
     /** Set by the owning service so settings can re-run the system handshake. */
     var onRetryFocusPenLink: (() -> Unit)? = null
 
-    /** Set by the owning service: re-sends setEnable(touchFilm, 1) on the live link. */
-    var onResendFocusPenEnable: (() -> Unit)? = null
-
     fun updateFocusPenLinkState(state: FocusPenLinkState) {
         _focusPenLinkState.value = state
     }
@@ -177,15 +172,9 @@ class DrawViewModel(
         onRetryFocusPenLink?.invoke()
     }
 
-    fun resendFocusPenEnable() {
-        onResendFocusPenEnable?.invoke()
-    }
-
     fun setFocusPenLinkMode(mode: FocusPenLinkMode) =
         _uiState.update { it.copy(focusPenLinkMode = mode) }
 
-    fun setFocusPenLinkForced(forced: Boolean) =
-        _uiState.update { it.copy(focusPenLinkForced = forced) }
 
     private val _serviceState = MutableStateFlow(initialServiceState)
     val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()

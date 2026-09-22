@@ -3,12 +3,13 @@ name: Android CI
 on:
   push:
     branches: [ '**' ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -57,12 +58,39 @@ jobs:
           path: app/build/reports/tests
           if-no-files-found: ignore
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Build debug and release APKs
+        run: ./gradlew assembleDebug assembleRelease --stacktrace
+
+      - name: Name APKs after the version
+        id: name
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then LABEL="${GITHUB_REF_NAME}"; else LABEL="${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}"; fi
+          mkdir -p dist
+          cp app/build/outputs/apk/release/*.apk "dist/DrawAnywhere-${LABEL}-release.apk"
+          cp app/build/outputs/apk/debug/*.apk   "dist/DrawAnywhere-${LABEL}-debug.apk"
+          ls -la dist
+          echo "label=${LABEL}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: drawanywhere-release-apk
+          path: dist/*-release.apk
+          if-no-files-found: error
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: drawanywhere-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: dist/*-debug.apk
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DrawAnywhere ${{ steps.name.outputs.label }}
+          files: |
+            dist/*-release.apk
+            dist/*-debug.apk
+          generate_release_notes: true

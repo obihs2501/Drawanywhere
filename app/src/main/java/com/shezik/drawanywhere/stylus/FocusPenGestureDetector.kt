@@ -83,6 +83,8 @@ class FocusPenGestureDetector(
     private var pendingSingle: Cancellable? = null
     private var currentPressIsSecondTap = false
     private var ignoreCurrentPressUp = false
+    /** Non-null while a double tap we detected ourselves is still "recent". */
+    private var ownDoubleTapCooldown: Cancellable? = null
 
     /**
      * Feed one key event.
@@ -96,10 +98,11 @@ class FocusPenGestureDetector(
         when (gesture) {
             FocusPenGesture.Squeeze -> onSqueeze(action, repeatCount)
             FocusPenGesture.DoubleTap -> if (action == ACTION_DOWN && repeatCount == 0) {
-                // System-synthesised double tap: supersedes our own tap counting.
+                // System-synthesised double tap. If we already recognised this
+                // double tap from its two squeezes, do not fire it twice.
                 cancelPendingSingle()
                 if (squeezePressed) ignoreCurrentPressUp = true
-                onGesture(FocusPenGesture.DoubleTap)
+                if (ownDoubleTapCooldown == null) onGesture(FocusPenGesture.DoubleTap)
             }
             FocusPenGesture.SlideUp, FocusPenGesture.SlideDown ->
                 if (action == ACTION_DOWN && repeatCount == 0) onGesture(gesture)
@@ -112,13 +115,16 @@ class FocusPenGestureDetector(
             ACTION_DOWN -> {
                 if (squeezePressed || repeatCount > 0) return
                 squeezePressed = true
-                if (doubleTapWindowMs() <= 0L) {
+                val window = doubleTapWindowMs()
+                if (window <= 0L) {
                     onGesture(FocusPenGesture.Squeeze)
                     return
                 }
                 if (pendingSingle != null) {
                     cancelPendingSingle()
                     currentPressIsSecondTap = true
+                    ownDoubleTapCooldown?.cancel()
+                    ownDoubleTapCooldown = scheduler.schedule(window) { ownDoubleTapCooldown = null }
                     onGesture(FocusPenGesture.DoubleTap)
                 }
             }
@@ -151,6 +157,8 @@ class FocusPenGestureDetector(
 
     fun reset() {
         cancelPendingSingle()
+        ownDoubleTapCooldown?.cancel()
+        ownDoubleTapCooldown = null
         squeezePressed = false
         currentPressIsSecondTap = false
         ignoreCurrentPressUp = false

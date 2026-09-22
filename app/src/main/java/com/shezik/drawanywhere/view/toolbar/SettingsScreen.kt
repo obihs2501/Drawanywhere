@@ -1,11 +1,7 @@
 package com.shezik.drawanywhere.view.toolbar
 
 import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Intent
 import android.net.Uri
-import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,17 +23,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,14 +42,11 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.shezik.drawanywhere.BuildConfig
 import com.shezik.drawanywhere.DrawViewModel
-import com.shezik.drawanywhere.FocusPenTestActivity
 import com.shezik.drawanywhere.R
 import com.shezik.drawanywhere.model.FocusPenGesture
 import com.shezik.drawanywhere.model.FocusPenLinkMode
@@ -64,9 +54,6 @@ import com.shezik.drawanywhere.model.FocusPenLinkState
 import com.shezik.drawanywhere.model.PRESET_COLORS
 import com.shezik.drawanywhere.model.StylusButtonAction
 import com.shezik.drawanywhere.model.StylusButtonScheme
-import com.shezik.drawanywhere.stylus.DiagnosticLog
-import com.shezik.drawanywhere.stylus.ShellDiagnostics
-import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -277,7 +264,6 @@ fun SettingsScreen(
                                 FocusPenLinkStatus(
                                     state = focusPenLink,
                                     onRetry = viewModel::retryFocusPenLink,
-                                    onResendEnable = viewModel::resendFocusPenEnable,
                                 )
                             }
                         }
@@ -324,11 +310,6 @@ fun SettingsScreen(
                     }
                 }
 
-                item {
-                    PreferenceSection(title = stringResource(R.string.diagnostics)) {
-                        DiagnosticsPanel()
-                    }
-                }
 
                 item {
                     PreferenceSection(title = stringResource(R.string.settings_capture_section)) {
@@ -603,7 +584,6 @@ private fun AboutContent() {
 private fun FocusPenLinkStatus(
     state: FocusPenLinkState,
     onRetry: () -> Unit,
-    onResendEnable: () -> Unit,
 ) {
     val phaseText = when (state.phase) {
         FocusPenLinkState.Phase.Idle -> stringResource(R.string.focus_pen_link_idle)
@@ -638,130 +618,14 @@ private fun FocusPenLinkStatus(
                     style = MiuixTheme.textStyles.body2,
                     color = MiuixTheme.colorScheme.primary,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    TextButton(
-                        text = stringResource(R.string.focus_pen_link_retry),
-                        onClick = onRetry,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        text = stringResource(R.string.focus_pen_link_resend),
-                        onClick = onResendEnable,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                TextButton(
+                    text = stringResource(R.string.focus_pen_link_retry),
+                    onClick = onRetry,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         },
     )
-}
-
-@Composable
-private fun DiagnosticsPanel() {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val lines by DiagnosticLog.lines.collectAsState()
-    var busy by remember { mutableStateOf(false) }
-    var hint by remember { mutableStateOf<String?>(null) }
-
-    fun runDiagnostic(label: String, block: suspend () -> String?) {
-        if (busy) return
-        busy = true
-        scope.launch {
-            try {
-                val result = block()
-                DiagnosticLog.logBlock("Diag", label, result ?: "(no output / failed)")
-            } finally {
-                busy = false
-                hint = null
-            }
-        }
-    }
-
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.diag_desc),
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TextButton(
-                text = stringResource(R.string.diag_copy),
-                onClick = {
-                    context.getSystemService(ClipboardManager::class.java)
-                        .setPrimaryClip(ClipData.newPlainText("DrawAnywhere diagnostics", DiagnosticLog.dump()))
-                    Toast.makeText(context, R.string.diag_copied, Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(
-                text = stringResource(R.string.diag_clear),
-                onClick = { DiagnosticLog.clear() },
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TextButton(
-                text = stringResource(R.string.diag_read_logcat),
-                onClick = { runDiagnostic("app logcat") { ShellDiagnostics.readOwnLogcat() } },
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(
-                text = stringResource(R.string.diag_read_stylus_settings),
-                onClick = { runDiagnostic("system stylus settings") { ShellDiagnostics.readStylusSettings(context) } },
-                modifier = Modifier.weight(1f),
-            )
-        }
-        val recordingHint = stringResource(R.string.diag_root_pen_events_hint)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TextButton(
-                text = stringResource(R.string.diag_root_pen_events),
-                onClick = {
-                    hint = recordingHint
-                    runDiagnostic("root pen input (8 s)") { ShellDiagnostics.rootCapturePenEvents(8) }
-                },
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(
-                text = stringResource(R.string.diag_root_system_log),
-                onClick = { runDiagnostic("root system log") { ShellDiagnostics.rootReadSystemLogcat() } },
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TextButton(
-                text = stringResource(R.string.diag_root_pen_device),
-                onClick = { runDiagnostic("root pen device info") { ShellDiagnostics.rootPenInputDeviceInfo() } },
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(
-                text = stringResource(R.string.diag_root_export_jars),
-                onClick = { runDiagnostic("root export framework jars") { ShellDiagnostics.rootExportStylusFrameworkJars() } },
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Button(
-            onClick = {
-                context.startActivity(
-                    Intent(context, FocusPenTestActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.diag_open_test_page))
-        }
-        hint?.let {
-            Text(text = it, style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.primary)
-        }
-        Text(
-            text = if (lines.isEmpty()) stringResource(R.string.diag_empty) else lines.takeLast(60).joinToString("\n"),
-            style = MiuixTheme.textStyles.body2.copy(fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 13.sp),
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
-        )
-    }
 }
 
 private val focusPenLinkModeValues = listOf(FocusPenLinkMode.Direct, FocusPenLinkMode.Sdk)

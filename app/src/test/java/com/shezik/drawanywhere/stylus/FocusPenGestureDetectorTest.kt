@@ -119,9 +119,29 @@ class FocusPenGestureDetectorTest {
         val (d, s, fired) = newDetector()
         d.squeeze()
         d.onKey(KEYCODE_SQUEEZE, ACTION_DOWN)
-        // Hypothetical system-synthesised 195 while the second squeeze is held.
+        // Hypothetical system-synthesised 195 while the second squeeze is held:
+        // we already fired DoubleTap from the two squeezes, so 195 is a duplicate.
         d.onKey(KEYCODE_DOUBLE_TAP, ACTION_DOWN)
         d.onKey(KEYCODE_DOUBLE_TAP, ACTION_UP)
+        d.onKey(KEYCODE_SQUEEZE, ACTION_UP)
+        s.advance(1_000)
+        assertEquals(listOf(FocusPenGesture.DoubleTap), fired)
+    }
+
+    @Test
+    fun systemDoubleTapKeyAloneFiresOnce() {
+        val (d, s, fired) = newDetector()
+        d.onKey(KEYCODE_DOUBLE_TAP, ACTION_DOWN)
+        d.onKey(KEYCODE_DOUBLE_TAP, ACTION_UP)
+        s.advance(1_000)
+        assertEquals(listOf(FocusPenGesture.DoubleTap), fired)
+    }
+
+    @Test
+    fun systemDoubleTapKeyDuringFirstSqueezeCancelsSingle() {
+        val (d, s, fired) = newDetector()
+        d.onKey(KEYCODE_SQUEEZE, ACTION_DOWN)
+        d.onKey(KEYCODE_DOUBLE_TAP, ACTION_DOWN)
         d.onKey(KEYCODE_SQUEEZE, ACTION_UP)
         s.advance(1_000)
         assertEquals(listOf(FocusPenGesture.DoubleTap), fired)

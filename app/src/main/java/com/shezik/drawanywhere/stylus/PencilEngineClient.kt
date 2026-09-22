@@ -166,11 +166,6 @@ class PencilEngineClient(
         onStateChanged(false, false, null, null)
     }
 
-    /** Re-sends the enable command on an existing connection; returns its result. */
-    fun resendEnable(): Int? {
-        val binder = remote ?: return null
-        return transactSetEnable(binder, FEATURE_TOUCH_FILM, 1).also { lastEnableResult = it }
-    }
 
     private fun performHandshake() {
         val binder = remote ?: return

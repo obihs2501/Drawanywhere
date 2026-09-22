@@ -21,8 +21,8 @@ android {
         applicationId = "com.shezik.drawanywhere"
         minSdk = 33
         targetSdk = 36
-        versionCode = 9
-        versionName = "2.4.3-hpos-focuspen"
+        versionCode = 10
+        versionName = "2.5.0-hpos-focuspen"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -39,16 +39,20 @@ android {
         }
         create("release") {
             val storeFilePath = localProperties.getProperty("store.file")
-            val storePasswordValue = localProperties.getProperty("store.password")
-            val keyAliasValue = localProperties.getProperty("key.alias")
-            val keyPasswordValue = localProperties.getProperty("key.password")
-
             if (!storeFilePath.isNullOrBlank()) {
                 storeFile = file(storeFilePath)
+                storePassword = localProperties.getProperty("store.password")
+                keyAlias = localProperties.getProperty("key.alias")
+                keyPassword = localProperties.getProperty("key.password")
+            } else {
+                // Committed CI key so GitHub Actions can produce installable release builds
+                // without secrets. Anyone can sign with it, so it carries no publisher
+                // identity; for real distribution put a private key in local.properties.
+                storeFile = file("ci-release.keystore")
+                storePassword = "drawanywhere"
+                keyAlias = "drawanywhere"
+                keyPassword = "drawanywhere"
             }
-            storePassword = storePasswordValue
-            keyAlias = keyAliasValue
-            keyPassword = keyPasswordValue
         }
     }
 
@@ -62,6 +66,11 @@ android {
                 "proguard-rules.pro"
             )
         }
+    }
+
+    lint {
+        // lintVital would otherwise gate assembleRelease on CI; lint is run separately.
+        checkReleaseBuilds = false
     }
 
     compileOptions {

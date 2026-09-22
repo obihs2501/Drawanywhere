@@ -36,3 +36,4 @@ google-services.json
 
 # CI debug signing key (see app/build.gradle.kts signingConfigs.debug)
 !/app/ci-debug.keystore
+!/app/ci-release.keystore
