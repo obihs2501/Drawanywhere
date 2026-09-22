@@ -151,6 +151,7 @@ class MainService : Service() {
 
         focusPenLink = FocusPenSystemLink(this, serviceScope)
         viewModel.onRetryFocusPenLink = { focusPenLink.restart() }
+        viewModel.onResendFocusPenEnable = { focusPenLink.resendEnable() }
         serviceScope.launch {
             focusPenLink.state.collect { linkState -> viewModel.updateFocusPenLinkState(linkState) }
         }
@@ -323,9 +324,8 @@ class MainService : Service() {
      */
     private fun syncFocusPenLink(state: UiState) {
         val wanted = state.stylusButtonScheme == StylusButtonScheme.XiaomiFocusPen &&
-            state.canvasVisible &&
-            !state.canvasPassthrough
-        if (wanted) focusPenLink.enable() else focusPenLink.disable()
+            (state.focusPenLinkForced || (state.canvasVisible && !state.canvasPassthrough))
+        if (wanted) focusPenLink.enable(state.focusPenLinkMode) else focusPenLink.disable()
     }
 
     private fun reportKeyEvent(event: KeyEvent) {

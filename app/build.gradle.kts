@@ -21,8 +21,8 @@ android {
         applicationId = "com.shezik.drawanywhere"
         minSdk = 33
         targetSdk = 36
-        versionCode = 6
-        versionName = "2.4-hpos-focuspen"
+        versionCode = 7
+        versionName = "2.4.1-hpos-focuspen-diag"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

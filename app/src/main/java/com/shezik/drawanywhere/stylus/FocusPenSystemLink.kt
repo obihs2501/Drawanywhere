@@ -20,6 +20,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
 import com.miui.penengine.touchfilm.MiuiTouchFilmUtils
+import com.shezik.drawanywhere.model.FocusPenLinkMode
 import com.shezik.drawanywhere.model.FocusPenLinkState
 import com.shezik.drawanywhere.model.FocusPenLinkState.Phase
 import kotlinx.coroutines.CoroutineScope
@@ -35,27 +36,23 @@ import com.miui.penengine.a.b as PenEngineFacade
 /**
  * Claims the Focus Pen barrel-gesture stream from HyperOS.
  *
- * Reading KeyEvents 194–197 is not enough on its own: the system only injects
- * those keys into the focused window after an app has registered with the
- * pencil-engine service (`com.xiaomi.touchservice`) and enabled "touch film"
- * mode. Otherwise the system keeps the gesture and shows its own shortcut
- * wheel. [MiuiTouchFilmUtils.init] performs exactly that handshake:
+ * Reading KeyEvents alone is not enough: `MiuiStylusTouchFilmManager` in
+ * system_server decides, per focused window package, whether a pen key is
+ * handled by the system (shortcut wheel) or queued for the app. The app has
+ * to be registered with the pencil-engine service (`com.xiaomi.touchservice`)
+ * and have "touch film" enabled:
  *
  *  1. `bindService` to `com.xiaomi.touchservice/.pencilengine.PencilEngineManagerService`
- *  2. `IPencilEngine.registerListener(callback[, packageName])`
+ *  2. `IPencilEngine.registerListener(callback, packageName)`
  *  3. `IPencilEngine.setEnable(2 /* touch film */, 1)`
  *
- * and [MiuiTouchFilmUtils.onDestroy] reverses it. This class only uses the SDK
- * for that handshake. It deliberately never calls
- * `MiuiTouchFilmUtils.onDispatchKeyEvent`, because that path reads the system
- * stylus settings (`stylus_pinch_status`, `stylus_double_click_status`) and
- * turns gestures into the system's function numbers. Key codes are mapped
- * in-app instead (see [FocusPenGestureDetector]).
- *
- * Everything the SDK does is wrapped in `runCatching`: the SDK statically loads
- * `/system_ext/framework/xiaomi-pencilengine-pad.jar` and native code, both of
- * which are absent on non-Xiaomi devices, and a failure there must never take
- * the overlay service down.
+ * Two implementations are available ([FocusPenLinkMode]): our own binder
+ * client ([PencilEngineClient], always registers with the package name and
+ * reports every return value) and the bundled PenEngine SDK
+ * ([MiuiTouchFilmUtils.init], which only passes the package name when the
+ * system's engine version string equals the SDK's). Neither path uses the
+ * SDK's key-event callback: key codes are mapped in-app
+ * ([FocusPenGestureDetector]) so the system stylus settings stay untouched.
  */
 class FocusPenSystemLink(
     context: Context,
@@ -65,8 +62,6 @@ class FocusPenSystemLink(
         private const val TAG = "FocusPenLink"
         const val TOUCH_SERVICE_PACKAGE = "com.xiaomi.touchservice"
         private const val ENGINE_JAR_PATH = "/system_ext/framework/xiaomi-pencilengine-pad.jar"
-
-        /** Feature id of "touch film" (barrel gestures) in IPencilEngine.setEnable(). */
         private const val FEATURE_TOUCH_FILM = 2
         private const val POLL_WHILE_CONNECTING_MS = 400L
         private const val POLL_WHILE_CONNECTED_MS = 3_000L
@@ -77,16 +72,30 @@ class FocusPenSystemLink(
     val state: StateFlow<FocusPenLinkState> = _state.asStateFlow()
 
     private var active = false
+    private var activeMode: FocusPenLinkMode? = null
     private var pollJob: Job? = null
-    private var enableResultRecorded = false
+    private var sdkEnableRecorded = false
 
-    /**
-     * The SDK never calls [onTouchFilmTriggered] because we do not forward key
-     * events to it; the listener only has to exist for init().
-     */
-    private val listener = object : MiuiTouchFilmUtils.TouchFilmListener {
+    private val directClient = PencilEngineClient(appContext) client@{ bound, connected, enableResult, detail ->
+        if (activeMode != FocusPenLinkMode.Direct) return@client
+        val phase = when {
+            connected -> Phase.Connected
+            bound -> Phase.Binding
+            detail == "disconnected" || detail == "service died" -> Phase.Disconnected
+            else -> Phase.Failed
+        }
+        _state.value = _state.value.copy(
+            phase = phase,
+            sdkInitOk = bound,
+            enableResult = enableResult ?: _state.value.enableResult,
+            detail = detail,
+        )
+    }
+
+    /** Only needed so the SDK's init() has a listener; its callbacks are ignored. */
+    private val sdkListener = object : MiuiTouchFilmUtils.TouchFilmListener {
         override fun onTouchFilmTriggered(function: Int) {
-            Log.d(TAG, "onTouchFilmTriggered($function) ignored: gestures are mapped in-app")
+            DiagnosticLog.log(TAG, "SDK onTouchFilmTriggered($function) ignored: gestures are mapped in-app")
         }
 
         override fun onBrushPreviewChanged(enabled: Boolean) = Unit
@@ -94,32 +103,47 @@ class FocusPenSystemLink(
 
     val isActive: Boolean get() = active
 
-    fun enable() {
-        if (active) return
+    fun enable(mode: FocusPenLinkMode) {
+        if (active && activeMode == mode) return
+        if (active) disable()
         active = true
-        enableResultRecorded = false
+        activeMode = mode
+        sdkEnableRecorded = false
 
         val serviceInstalled = isTouchServiceInstalled()
         val jarPresent = runCatching { File(ENGINE_JAR_PATH).exists() }.getOrDefault(false)
+        val engineVersion = PencilEngineClient.readEngineVersion(appContext)
+        DiagnosticLog.log(
+            TAG,
+            "enable(mode=$mode): touchservice=$serviceInstalled engineJar=$jarPresent engineVersion=$engineVersion",
+        )
         if (!serviceInstalled) {
-            Log.w(TAG, "$TOUCH_SERVICE_PACKAGE is not installed; Focus Pen gestures stay with the system")
             _state.value = FocusPenLinkState(
                 phase = Phase.ServiceMissing,
+                mode = mode,
                 touchServiceInstalled = false,
                 engineJarPresent = jarPresent,
+                engineVersion = engineVersion,
             )
             return
         }
-
         _state.value = FocusPenLinkState(
             phase = Phase.Binding,
+            mode = mode,
             touchServiceInstalled = true,
             engineJarPresent = jarPresent,
+            engineVersion = engineVersion,
         )
-        val initResult = runCatching { MiuiTouchFilmUtils.init(appContext, listener) }
-        initResult
+        when (mode) {
+            FocusPenLinkMode.Direct -> directClient.connect()
+            FocusPenLinkMode.Sdk -> enableSdk()
+        }
+    }
+
+    private fun enableSdk() {
+        runCatching { MiuiTouchFilmUtils.init(appContext, sdkListener) }
             .onSuccess { ok ->
-                Log.i(TAG, "MiuiTouchFilmUtils.init -> $ok (engine jar present: $jarPresent)")
+                DiagnosticLog.log(TAG, "MiuiTouchFilmUtils.init -> $ok")
                 _state.value = _state.value.copy(
                     sdkInitOk = ok,
                     phase = if (ok) Phase.Binding else Phase.Failed,
@@ -128,13 +152,10 @@ class FocusPenSystemLink(
             }
             .onFailure { error ->
                 Log.e(TAG, "MiuiTouchFilmUtils.init threw", error)
-                _state.value = _state.value.copy(
-                    sdkInitOk = false,
-                    phase = Phase.Failed,
-                    detail = error.toString(),
-                )
+                DiagnosticLog.log(TAG, "MiuiTouchFilmUtils.init threw: $error")
+                _state.value = _state.value.copy(sdkInitOk = false, phase = Phase.Failed, detail = error.toString())
             }
-        startPolling()
+        startSdkPolling()
     }
 
     fun disable() {
@@ -142,14 +163,36 @@ class FocusPenSystemLink(
         active = false
         pollJob?.cancel()
         pollJob = null
-        runCatching { MiuiTouchFilmUtils.onDestroy() }
-            .onFailure { Log.w(TAG, "MiuiTouchFilmUtils.onDestroy threw", it) }
+        when (activeMode) {
+            FocusPenLinkMode.Direct -> directClient.disconnect()
+            FocusPenLinkMode.Sdk -> runCatching { MiuiTouchFilmUtils.onDestroy() }
+                .onFailure { DiagnosticLog.log(TAG, "MiuiTouchFilmUtils.onDestroy threw: $it") }
+            null -> Unit
+        }
+        DiagnosticLog.log(TAG, "disabled (mode=$activeMode)")
+        activeMode = null
         _state.value = FocusPenLinkState()
     }
 
     fun restart() {
+        val mode = activeMode ?: return
         disable()
-        enable()
+        enable(mode)
+    }
+
+    /** Re-issues setEnable(touchFilm, 1) on the live connection, for the diagnostics page. */
+    fun resendEnable() {
+        when (activeMode) {
+            FocusPenLinkMode.Direct -> {
+                val result = directClient.resendEnable()
+                _state.value = _state.value.copy(enableResult = result ?: _state.value.enableResult)
+            }
+            FocusPenLinkMode.Sdk -> {
+                sdkEnableRecorded = false
+                refreshSdkConnection()
+            }
+            null -> DiagnosticLog.log(TAG, "resendEnable ignored: link inactive")
+        }
     }
 
     private fun isTouchServiceInstalled(): Boolean =
@@ -163,11 +206,11 @@ class FocusPenSystemLink(
             false
         }
 
-    private fun startPolling() {
+    private fun startSdkPolling() {
         pollJob?.cancel()
         pollJob = scope.launch {
-            while (active) {
-                refreshConnection()
+            while (active && activeMode == FocusPenLinkMode.Sdk) {
+                refreshSdkConnection()
                 delay(
                     if (_state.value.phase == Phase.Connected) POLL_WHILE_CONNECTED_MS
                     else POLL_WHILE_CONNECTING_MS
@@ -177,24 +220,21 @@ class FocusPenSystemLink(
     }
 
     /**
-     * Peeks at the SDK singleton to learn whether the binder to the pen service
-     * is up, and records the touch-film enable result once. The member names
-     * are the obfuscated ones of PenEngine 0.3.2 (the bundled AAR):
-     * `b.c()` singleton, `.d` bound flag, `.h` IPencilEngine proxy.
+     * Peeks at the SDK singleton (obfuscated members of PenEngine 0.3.2:
+     * `b.c()` singleton, `.d` bound flag, `.h` IPencilEngine proxy) and records
+     * the touch-film enable result once.
      */
-    private fun refreshConnection() {
-        if (!active) return
+    private fun refreshSdkConnection() {
+        if (!active || activeMode != FocusPenLinkMode.Sdk) return
         val current = _state.value
         if (current.sdkInitOk != true) return
 
         val peek = runCatching {
             val facade = PenEngineFacade.c()
-            val bound = facade.d
-            val proxy = facade.h
-            bound to proxy
+            facade.d to facade.h
         }
         val (bound, proxy) = peek.getOrElse { error ->
-            Log.w(TAG, "Unable to inspect SDK state", error)
+            DiagnosticLog.log(TAG, "SDK state peek failed: $error")
             _state.value = current.copy(detail = "state peek failed: $error")
             return
         }
@@ -206,17 +246,14 @@ class FocusPenSystemLink(
         }
 
         var enableResult = current.enableResult
-        if (!enableResultRecorded) {
-            enableResultRecorded = true
+        if (!sdkEnableRecorded) {
+            sdkEnableRecorded = true
             enableResult = runCatching { proxy.a(FEATURE_TOUCH_FILM, 1) }
-                .onSuccess { Log.i(TAG, "setEnable(touchFilm, 1) -> $it") }
-                .onFailure { Log.w(TAG, "setEnable(touchFilm, 1) threw", it) }
+                .onSuccess { DiagnosticLog.log(TAG, "SDK proxy setEnable(touchFilm, 1) -> $it") }
+                .onFailure { DiagnosticLog.log(TAG, "SDK proxy setEnable(touchFilm, 1) threw: $it") }
                 .getOrNull()
         }
-        _state.value = current.copy(
-            phase = Phase.Connected,
-            enableResult = enableResult,
-            detail = null,
-        )
+        if (current.phase != Phase.Connected) DiagnosticLog.log(TAG, "SDK binder connected")
+        _state.value = current.copy(phase = Phase.Connected, enableResult = enableResult, detail = null)
     }
 }

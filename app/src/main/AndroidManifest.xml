@@ -53,6 +53,12 @@
             android:theme="@style/Theme.DrawAnywhere" />
 
         <activity
+            android:name=".FocusPenTestActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.DrawAnywhere" />
+
+        <activity
             android:name=".ScreenCapturePermissionActivity"
             android:exported="false"
             android:theme="@style/Theme.DrawAnywhere.TransparentActivity"

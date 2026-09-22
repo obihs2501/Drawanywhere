@@ -37,6 +37,15 @@ enum class FocusPenGesture {
     SlideDown,
 }
 
+/** How the app claims the gesture stream from the system pen service. */
+enum class FocusPenLinkMode {
+    /** Own binder client: registerListener(callback, packageName) + setEnable(2, 1). */
+    Direct,
+
+    /** Bundled PenEngine SDK: MiuiTouchFilmUtils.init(). */
+    Sdk,
+}
+
 /**
  * Runtime state of the link to the system pencil-engine service
  * (`com.xiaomi.touchservice`). Purely informational; shown in settings so the
@@ -44,11 +53,14 @@ enum class FocusPenGesture {
  */
 data class FocusPenLinkState(
     val phase: Phase = Phase.Idle,
+    val mode: FocusPenLinkMode? = null,
     /** Whether the pen service package is installed (null = not checked yet). */
     val touchServiceInstalled: Boolean? = null,
     /** Whether the system pencil-engine jar the SDK requires is present. */
     val engineJarPresent: Boolean? = null,
-    /** Whether the SDK's init() returned true. */
+    /** Version string the system publishes in `stylus_pencil_engine_version`. */
+    val engineVersion: String? = null,
+    /** Whether the SDK's init() returned true (SDK mode) / bindService succeeded (direct mode). */
     val sdkInitOk: Boolean? = null,
     /** Return value of the touch-film enable command, when known. */
     val enableResult: Int? = null,

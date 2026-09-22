@@ -61,4 +61,15 @@ class FocusPenGestureDetectorTest {
         d.reset()
         assertEquals(FocusPenGesture.Squeeze, d.onKey(KEYCODE_SQUEEZE, ACTION_DOWN))
     }
+
+    @Test
+    fun rawScanCode189IsSqueezeWhateverTheKeyCode() {
+        val d = FocusPenGestureDetector()
+        assertTrue(FocusPenGestureDetector.isGestureKey(keyCode = 0, scanCode = 189))
+        assertFalse(FocusPenGestureDetector.isGestureKey(keyCode = 0, scanCode = 188))
+        assertEquals(FocusPenGesture.Squeeze, d.onKey(keyCode = 0, action = ACTION_DOWN, scanCode = 189))
+        assertNull(d.onKey(keyCode = 0, action = ACTION_DOWN, scanCode = 189))
+        assertNull(d.onKey(keyCode = 0, action = ACTION_UP, scanCode = 189))
+        assertEquals(FocusPenGesture.Squeeze, d.onKey(keyCode = 0, action = ACTION_DOWN, scanCode = 189))
+    }
 }

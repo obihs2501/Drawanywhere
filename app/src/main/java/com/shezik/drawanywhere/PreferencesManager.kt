@@ -20,6 +20,7 @@ import android.content.Context
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import com.shezik.drawanywhere.model.FocusPenGesture
+import com.shezik.drawanywhere.model.FocusPenLinkMode
 import com.shezik.drawanywhere.model.PenConfig
 import com.shezik.drawanywhere.model.PenType
 import com.shezik.drawanywhere.model.StylusButtonAction
@@ -58,6 +59,7 @@ class PreferencesManager(private val context: Context) {
         val KEY_DIAGNOSTICS_ENABLED = booleanPreferencesKey("key_diagnostics_enabled")
         val KEEP_SCREEN_CAPTURE_SESSION = booleanPreferencesKey("keep_screen_capture_session")
         val ROOT_SCREENSHOT_ENABLED = booleanPreferencesKey("root_screenshot_enabled")
+        val FOCUS_PEN_LINK_MODE = stringPreferencesKey("focus_pen_link_mode")
         val PRESSURE_ERASER_ENABLED = booleanPreferencesKey("pressure_eraser_enabled")
         val PRESSURE_ERASER_THRESHOLD = floatPreferencesKey("pressure_eraser_threshold")
         val RECENT_COLORS = stringPreferencesKey("recent_colors")
@@ -153,6 +155,10 @@ class PreferencesManager(private val context: Context) {
             ?: defaultUiState.keepScreenCaptureSession
         val rootScreenshotEnabled = preferences[PreferencesKeys.ROOT_SCREENSHOT_ENABLED]
             ?: defaultUiState.rootScreenshotEnabled
+        val focusPenLinkMode = getEnumValueOrDefault<FocusPenLinkMode>(
+            preferences[PreferencesKeys.FOCUS_PEN_LINK_MODE],
+            defaultUiState.focusPenLinkMode
+        )
         val pressureEraserEnabled = preferences[PreferencesKeys.PRESSURE_ERASER_ENABLED]
             ?: defaultUiState.pressureEraserEnabled
         val pressureEraserThreshold = preferences[PreferencesKeys.PRESSURE_ERASER_THRESHOLD]
@@ -199,6 +205,7 @@ class PreferencesManager(private val context: Context) {
             keyDiagnosticsEnabled = keyDiagnosticsEnabled,
             keepScreenCaptureSession = keepScreenCaptureSession,
             rootScreenshotEnabled = rootScreenshotEnabled,
+            focusPenLinkMode = focusPenLinkMode,
             pressureEraserEnabled = pressureEraserEnabled,
             pressureEraserThreshold = pressureEraserThreshold,
             recentColors = recentColors,
@@ -234,6 +241,7 @@ class PreferencesManager(private val context: Context) {
             preferences[PreferencesKeys.KEY_DIAGNOSTICS_ENABLED] = uiState.keyDiagnosticsEnabled
             preferences[PreferencesKeys.KEEP_SCREEN_CAPTURE_SESSION] = uiState.keepScreenCaptureSession
             preferences[PreferencesKeys.ROOT_SCREENSHOT_ENABLED] = uiState.rootScreenshotEnabled
+            preferences[PreferencesKeys.FOCUS_PEN_LINK_MODE] = uiState.focusPenLinkMode.name
             preferences[PreferencesKeys.PRESSURE_ERASER_ENABLED] = uiState.pressureEraserEnabled
             preferences[PreferencesKeys.PRESSURE_ERASER_THRESHOLD] = uiState.pressureEraserThreshold
             preferences[PreferencesKeys.RECENT_COLORS] = uiState.recentColors.joinToString(",") { it.toArgb().toString(16).padStart(8, '0') }

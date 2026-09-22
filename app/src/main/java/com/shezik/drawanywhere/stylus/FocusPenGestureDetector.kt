@@ -19,21 +19,21 @@ package com.shezik.drawanywhere.stylus
 import com.shezik.drawanywhere.model.FocusPenGesture
 
 /**
- * Turns the raw key codes HyperOS emits for Xiaomi Focus Pen barrel gestures
+ * Turns the key events HyperOS emits for Xiaomi Focus Pen barrel gestures
  * into [FocusPenGesture]s.
  *
- * Key codes (from the decompiled PenEngine SDK, `com.miui.penengine.e.j`):
+ * Two shapes of event exist:
  *
- * | code | Android name       | gesture    |
- * |------|--------------------|------------|
- * | 194  | KEYCODE_BUTTON_7   | squeeze    |
- * | 195  | KEYCODE_BUTTON_8   | double tap |
- * | 196  | KEYCODE_BUTTON_9   | slide up   |
- * | 197  | KEYCODE_BUTTON_10  | slide down |
+ * 1. Translated codes the system injects for a registered touch-film client
+ *    (decompiled PenEngine SDK, `com.miui.penengine.e.j`):
+ *    194 squeeze, 195 double tap, 196 slide up, 197 slide down.
+ * 2. The raw pen key as seen in `system_server` when nothing translates it
+ *    (FocusPenProX `CompatProfile`): squeeze = scan code 189 (KEY_F19) with
+ *    whatever key code the layout assigns; slides keep 196 / 197.
  *
- * The SDK fires every gesture on ACTION_DOWN. Squeeze additionally latches
- * until its ACTION_UP so a held squeeze cannot repeat. The class is plain
- * Kotlin (no android.view.KeyEvent) so it can be unit-tested on the JVM.
+ * Every gesture fires on ACTION_DOWN. Squeeze latches until ACTION_UP so a
+ * held squeeze cannot repeat. Plain Kotlin (no android.view.KeyEvent) so it
+ * can be unit-tested on the JVM.
  */
 class FocusPenGestureDetector {
 
@@ -43,6 +43,9 @@ class FocusPenGestureDetector {
         const val KEYCODE_SLIDE_UP = 196
         const val KEYCODE_SLIDE_DOWN = 197
 
+        /** Linux KEY_F19: raw squeeze scan code of the Focus Pen. */
+        const val SCANCODE_SQUEEZE_RAW = 189
+
         /** Mirrors android.view.KeyEvent.ACTION_DOWN / ACTION_UP. */
         const val ACTION_DOWN = 0
         const val ACTION_UP = 1
@@ -50,12 +53,15 @@ class FocusPenGestureDetector {
         fun isGestureKeyCode(keyCode: Int): Boolean =
             keyCode in KEYCODE_SQUEEZE..KEYCODE_SLIDE_DOWN
 
-        fun gestureForKeyCode(keyCode: Int): FocusPenGesture? = when (keyCode) {
+        fun isGestureKey(keyCode: Int, scanCode: Int): Boolean =
+            isGestureKeyCode(keyCode) || scanCode == SCANCODE_SQUEEZE_RAW
+
+        fun gestureForKey(keyCode: Int, scanCode: Int = 0): FocusPenGesture? = when (keyCode) {
             KEYCODE_SQUEEZE -> FocusPenGesture.Squeeze
             KEYCODE_DOUBLE_TAP -> FocusPenGesture.DoubleTap
             KEYCODE_SLIDE_UP -> FocusPenGesture.SlideUp
             KEYCODE_SLIDE_DOWN -> FocusPenGesture.SlideDown
-            else -> null
+            else -> if (scanCode == SCANCODE_SQUEEZE_RAW) FocusPenGesture.Squeeze else null
         }
     }
 
@@ -66,11 +72,11 @@ class FocusPenGestureDetector {
      *
      * @return the gesture to trigger, or null when the event only needs to be
      *   consumed (key-up, key repeat, latched squeeze). Callers should consume
-     *   every event whose key code passes [isGestureKeyCode] regardless of the
-     *   return value so nothing leaks to windows underneath.
+     *   every event whose codes pass [isGestureKey] regardless of the return
+     *   value so nothing leaks to windows underneath.
      */
-    fun onKey(keyCode: Int, action: Int, repeatCount: Int = 0): FocusPenGesture? {
-        val gesture = gestureForKeyCode(keyCode) ?: return null
+    fun onKey(keyCode: Int, action: Int, repeatCount: Int = 0, scanCode: Int = 0): FocusPenGesture? {
+        val gesture = gestureForKey(keyCode, scanCode) ?: return null
         if (gesture == FocusPenGesture.Squeeze) {
             return when (action) {
                 ACTION_DOWN -> if (squeezeLatched || repeatCount > 0) {

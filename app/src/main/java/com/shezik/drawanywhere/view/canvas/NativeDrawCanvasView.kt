@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.toArgb
 import com.shezik.drawanywhere.DrawController
 import com.shezik.drawanywhere.DrawViewModel
 import com.shezik.drawanywhere.model.StylusButtonScheme
+import com.shezik.drawanywhere.stylus.DiagnosticLog
 import com.shezik.drawanywhere.stylus.FocusPenGestureDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -120,6 +121,16 @@ class NativeDrawCanvasView(
     private val focusPenDetector = FocusPenGestureDetector()
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val gestureKey = FocusPenGestureDetector.isGestureKey(event.keyCode, event.scanCode)
+        if (gestureKey || viewModel.uiState.value.keyDiagnosticsEnabled) {
+            DiagnosticLog.log(
+                "CanvasKey",
+                "code=${event.keyCode} scan=${event.scanCode} action=${event.action} repeat=${event.repeatCount} " +
+                    "src=0x${Integer.toHexString(event.source)} dev=${event.device?.name} " +
+                    "vid=${event.device?.vendorId?.let { Integer.toHexString(it) }} " +
+                    "pid=${event.device?.productId?.let { Integer.toHexString(it) }} focus=${hasWindowFocus()}",
+            )
+        }
         if (viewModel.uiState.value.keyDiagnosticsEnabled) {
             onKeyDiagnostic?.invoke(event)
         }
@@ -128,23 +139,30 @@ class NativeDrawCanvasView(
             super.dispatchKeyEvent(event)
     }
 
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        DiagnosticLog.log("Canvas", "window focus=$hasWindowFocus viewFocus=${isFocused}")
+    }
+
     fun requestStylusKeyFocus() {
         requestFocus()
     }
 
     /**
-     * Xiaomi Focus Pen barrel gestures arrive as key codes 194–197 once the
-     * system handshake (see FocusPenSystemLink) is in place. They are consumed
-     * here and mapped through the app's own settings; the system function
-     * numbers and stylus settings are never consulted.
+     * Xiaomi Focus Pen barrel gestures arrive as key codes 194–197 (or the raw
+     * squeeze scan code 189) once the system handshake (see FocusPenSystemLink)
+     * is in place. They are consumed here and mapped through the app's own
+     * settings; the system function numbers and stylus settings are never
+     * consulted.
      */
     private fun handleFocusPenKey(event: KeyEvent): Boolean {
         if (viewModel.uiState.value.stylusButtonScheme != StylusButtonScheme.XiaomiFocusPen) {
             return false
         }
-        if (!FocusPenGestureDetector.isGestureKeyCode(event.keyCode)) return false
-        val gesture = focusPenDetector.onKey(event.keyCode, event.action, event.repeatCount)
+        if (!FocusPenGestureDetector.isGestureKey(event.keyCode, event.scanCode)) return false
+        val gesture = focusPenDetector.onKey(event.keyCode, event.action, event.repeatCount, event.scanCode)
         if (gesture != null) {
+            DiagnosticLog.log("CanvasKey", "gesture $gesture -> ${viewModel.uiState.value.actionForFocusPenGesture(gesture)}")
             viewModel.performFocusPenGesture(gesture)
             invalidate()
         }
