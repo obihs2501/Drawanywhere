@@ -51,6 +51,7 @@
     <string name="focus_pen_slide_down">Slide down</string>
     <string name="focus_pen_link_status">System handshake</string>
     <string name="focus_pen_link_desc">DrawAnywhere registers with the HyperOS pen service while the canvas is shown, so barrel gestures come here instead of opening the system shortcut wheel. Mappings above are app-only; system stylus settings are never changed.</string>
+    <string name="focus_pen_system_setting_hint">One-time system setup: in Settings → Stylus, set “Squeeze” to anything other than “Shortcut wheel” (e.g. “Switch eraser”). With the wheel selected HyperOS handles the squeeze itself and never forwards it; with any other option the action is decided by the mapping above.</string>
     <string name="focus_pen_link_idle">Inactive (shown canvas without passthrough required)</string>
     <string name="focus_pen_link_missing">Pen service com.xiaomi.touchservice is not installed on this device</string>
     <string name="focus_pen_link_binding">Connecting to the pen service…</string>

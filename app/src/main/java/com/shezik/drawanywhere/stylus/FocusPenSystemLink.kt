@@ -65,6 +65,7 @@ class FocusPenSystemLink(
         private const val FEATURE_TOUCH_FILM = 2
         private const val POLL_WHILE_CONNECTING_MS = 400L
         private const val POLL_WHILE_CONNECTED_MS = 3_000L
+        private const val MAX_SDK_ENABLE_ATTEMPTS = 5
     }
 
     private val appContext = context.applicationContext
@@ -75,6 +76,7 @@ class FocusPenSystemLink(
     private var activeMode: FocusPenLinkMode? = null
     private var pollJob: Job? = null
     private var sdkEnableRecorded = false
+    private var sdkEnableAttempts = 0
 
     private val directClient = PencilEngineClient(appContext) client@{ bound, connected, enableResult, detail ->
         if (activeMode != FocusPenLinkMode.Direct) return@client
@@ -109,6 +111,7 @@ class FocusPenSystemLink(
         active = true
         activeMode = mode
         sdkEnableRecorded = false
+        sdkEnableAttempts = 0
 
         val serviceInstalled = isTouchServiceInstalled()
         val jarPresent = runCatching { File(ENGINE_JAR_PATH).exists() }.getOrDefault(false)
@@ -189,6 +192,7 @@ class FocusPenSystemLink(
             }
             FocusPenLinkMode.Sdk -> {
                 sdkEnableRecorded = false
+                sdkEnableAttempts = 0
                 refreshSdkConnection()
             }
             null -> DiagnosticLog.log(TAG, "resendEnable ignored: link inactive")
@@ -247,11 +251,15 @@ class FocusPenSystemLink(
 
         var enableResult = current.enableResult
         if (!sdkEnableRecorded) {
-            sdkEnableRecorded = true
-            enableResult = runCatching { proxy.a(FEATURE_TOUCH_FILM, 1) }
+            // The SDK registers its listener from a handler message after the binder
+            // connects; probing before that returns -1. Retry a few times.
+            val result = runCatching { proxy.a(FEATURE_TOUCH_FILM, 1) }
                 .onSuccess { DiagnosticLog.log(TAG, "SDK proxy setEnable(touchFilm, 1) -> $it") }
                 .onFailure { DiagnosticLog.log(TAG, "SDK proxy setEnable(touchFilm, 1) threw: $it") }
                 .getOrNull()
+            sdkEnableAttempts++
+            if (result == 0 || sdkEnableAttempts >= MAX_SDK_ENABLE_ATTEMPTS) sdkEnableRecorded = true
+            if (result != null) enableResult = result
         }
         if (current.phase != Phase.Connected) DiagnosticLog.log(TAG, "SDK binder connected")
         _state.value = current.copy(phase = Phase.Connected, enableResult = enableResult, detail = null)

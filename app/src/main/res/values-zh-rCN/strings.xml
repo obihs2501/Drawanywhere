@@ -52,6 +52,7 @@
     <string name="focus_pen_slide_down">下滑</string>
     <string name="focus_pen_link_status">系统握手状态</string>
     <string name="focus_pen_link_desc">画布显示期间，DrawAnywhere 会向 HyperOS 手写笔服务登记，笔身手势因此送到本应用而不是弹出系统快捷轮盘。上面的映射只在应用内生效，不会改动系统的手写笔设置。</string>
+    <string name="focus_pen_system_setting_hint">系统侧只需设置一次：在「设置 → 手写笔」里把「轻捏」设为「快捷轮盘」以外的任一项（例如「切换橡皮」）。选快捷轮盘时系统会自己处理轻捏、不下发给应用；选其他项时具体动作由上面的映射决定。</string>
     <string name="focus_pen_link_idle">未激活（需要显示画布且未开启触摸透传）</string>
     <string name="focus_pen_link_missing">本机未安装手写笔服务 com.xiaomi.touchservice</string>
     <string name="focus_pen_link_binding">正在连接手写笔服务…</string>

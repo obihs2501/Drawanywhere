@@ -472,6 +472,10 @@ class MainService : Service() {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
             setCanceledOnTouchOutside(false)
             setContentView(view)
+            // The settings window is focusable and takes key focus away from the
+            // canvas; route stylus keys to the canvas handler so barrel gestures
+            // keep working (and can be tested) while settings are open.
+            setOnKeyListener { _, _, event -> canvasView.dispatchKeyEvent(event) }
             window?.applySettingsWindowAttributes(params)
             show()
             window?.applySettingsWindowAttributes(params)

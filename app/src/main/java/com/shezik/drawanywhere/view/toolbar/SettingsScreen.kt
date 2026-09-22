@@ -620,6 +620,11 @@ private fun FocusPenLinkStatus(
                     style = MiuixTheme.textStyles.body2,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
+                Text(
+                    text = stringResource(R.string.focus_pen_system_setting_hint),
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.primary,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     TextButton(
                         text = stringResource(R.string.focus_pen_link_retry),
