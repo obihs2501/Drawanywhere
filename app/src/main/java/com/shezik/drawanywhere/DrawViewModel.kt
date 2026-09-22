@@ -25,6 +25,7 @@ import com.shezik.drawanywhere.model.PenConfig
 import com.shezik.drawanywhere.model.PenType
 import com.shezik.drawanywhere.model.PRESET_COLORS
 import com.shezik.drawanywhere.model.StrokeModifier
+import com.shezik.drawanywhere.model.FocusPenGesture
 import com.shezik.drawanywhere.model.StylusButtonAction
 import com.shezik.drawanywhere.model.StylusButtonScheme
 import com.shezik.drawanywhere.model.StrokeSample
@@ -62,6 +63,14 @@ data class UiState(
     val stylusButtonScheme: StylusButtonScheme = StylusButtonScheme.XiaomiSmartPen,
     val stylusPrimaryButtonAction: StylusButtonAction = StylusButtonAction.CyclePresetColor,
     val stylusSecondaryButtonAction: StylusButtonAction = StylusButtonAction.ToggleStrokeEraser,
+    /** 焦点触控笔：轻捏 */
+    val focusPenSqueezeAction: StylusButtonAction = StylusButtonAction.ToggleStrokeEraser,
+    /** 焦点触控笔：连击（双击） */
+    val focusPenMultiTapAction: StylusButtonAction = StylusButtonAction.SwitchPreviousPen,
+    /** 焦点触控笔：笔身上滑 */
+    val focusPenSlideUpAction: StylusButtonAction = StylusButtonAction.Undo,
+    /** 焦点触控笔：笔身下滑 */
+    val focusPenSlideDownAction: StylusButtonAction = StylusButtonAction.Redo,
     val pressureEraserEnabled: Boolean = false,
     val pressureEraserThreshold: Float = 0.85f,
     val recentColors: List<Color> = emptyList(),
@@ -151,9 +160,25 @@ class DrawViewModel(
     }
 
     fun switchToPen(type: PenType) {
+        val current = uiState.value.currentPenType
+        if (type != current) previousUserPenType = current
+        applyPenType(type)
+    }
+
+    /** 内部切换（含笔画临时橡皮），不污染「上次笔刷」历史。 */
+    private fun applyPenType(type: PenType) {
         if (type.isEraser) lastEraserPenType = type
         _uiState.update { it.copy(currentPenType = type) }
         controller.setPenConfig(uiState.value.currentPenConfig)
+    }
+
+    /** 焦点触控笔「切换上次笔刷」。 */
+    fun switchToPreviousPen() {
+        val current = uiState.value.currentPenType
+        val target = previousUserPenType ?: return
+        if (target == current) return
+        previousUserPenType = current
+        applyPenType(target)
     }
 
     fun switchToLastEraser() {
@@ -169,6 +194,7 @@ class DrawViewModel(
         }
 
     private var previousPenType: PenType? = null
+    private var previousUserPenType: PenType? = null
     private var isStrokeDown: Boolean = false
     private var stylusEraserReturnPenType: PenType = PenType.Pen
     private var stylusLaserReturnPenType: PenType = PenType.Pen
@@ -184,7 +210,7 @@ class DrawViewModel(
         val newPenType = resolvePenType(modifier)
         if (newPenType != uiState.value.currentPenType) {
             previousPenType = uiState.value.currentPenType
-            switchToPen(newPenType)
+            applyPenType(newPenType)
         }
 
         controller.createStroke(sample)
@@ -206,7 +232,7 @@ class DrawViewModel(
         controller.finishStroke()
 
         previousPenType?.let {
-            switchToPen(it)
+            applyPenType(it)
             previousPenType = null
         }
         isStrokeDown = false
@@ -291,8 +317,18 @@ class DrawViewModel(
             StylusButtonAction.ToggleCanvasVisibility -> toggleCanvasVisibility()
             StylusButtonAction.ToggleCanvasPassthrough -> toggleCanvasPassthrough()
             StylusButtonAction.ToggleLaser -> toggleLaser()
+            StylusButtonAction.SwitchPreviousPen -> switchToPreviousPen()
         }
     }
+
+    /** 焦点触控笔手势 → 用户配置的动作。 */
+    fun actionForFocusPenGesture(gesture: FocusPenGesture): StylusButtonAction =
+        when (gesture) {
+            FocusPenGesture.Squeeze -> uiState.value.focusPenSqueezeAction
+            FocusPenGesture.MultiTap -> uiState.value.focusPenMultiTapAction
+            FocusPenGesture.SlideUp -> uiState.value.focusPenSlideUpAction
+            FocusPenGesture.SlideDown -> uiState.value.focusPenSlideDownAction
+        }
 
     private fun toggleTool(toolType: PenType) {
         val currentType = uiState.value.currentPenType
@@ -451,6 +487,20 @@ class DrawViewModel(
 
     fun setStylusSecondaryButtonAction(action: StylusButtonAction) =
         _uiState.update { it.copy(stylusSecondaryButtonAction = action) }
+
+    fun setFocusPenGestureAction(gesture: FocusPenGesture, action: StylusButtonAction) =
+        _uiState.update { state ->
+            when (gesture) {
+                FocusPenGesture.Squeeze ->
+                    state.copy(focusPenSqueezeAction = action)
+                FocusPenGesture.MultiTap ->
+                    state.copy(focusPenMultiTapAction = action)
+                FocusPenGesture.SlideUp ->
+                    state.copy(focusPenSlideUpAction = action)
+                FocusPenGesture.SlideDown ->
+                    state.copy(focusPenSlideDownAction = action)
+            }
+        }
 
     fun setPressureEraserEnabled(state: Boolean) =
         _uiState.update { it.copy(pressureEraserEnabled = state) }

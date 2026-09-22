@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 
@@ -27,6 +28,8 @@ class ScreenCapturePermissionActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Let the user know this is only for screen-backdrop export and is reused afterwards.
+        Toast.makeText(this, R.string.screen_capture_permission_rationale, Toast.LENGTH_LONG).show()
         val mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
         permissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
     }

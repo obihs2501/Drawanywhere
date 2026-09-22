@@ -68,6 +68,7 @@ import com.shezik.drawanywhere.model.StylusButtonScheme
 import com.shezik.drawanywhere.ui.theme.DrawAnywhereTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -94,6 +95,10 @@ class MainService : Service() {
         const val EXTRA_SCREEN_CAPTURE_RESULT_CODE = "screen_capture_result_code"
         const val EXTRA_SCREEN_CAPTURE_DATA = "screen_capture_data"
         const val EXTRA_SAVE_LOCATION_URI = "save_location_uri"
+
+        /** 持有 MediaProjection 直到服务停止，避免每次保存都弹「允许录制或投放」。 */
+        private const val PROJECTION_IDLE_RELEASE_MS = 30 * 60 * 1000L
+
         var isRunning: Boolean = false
             private set
     }
@@ -117,6 +122,13 @@ class MainService : Service() {
     private lateinit var viewModel: DrawViewModel
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var pendingExportMode: ExportMode? = null
+
+    // ── MediaProjection session cache (avoid re-prompting on every screen save) ──
+    private var cachedProjection: MediaProjection? = null
+    private var cachedProjectionCode: Int? = null
+    private var cachedProjectionData: Intent? = null
+    private var cachedProjectionCallback: MediaProjection.Callback? = null
+    private var projectionReleaseJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -468,7 +480,97 @@ class MainService : Service() {
             return
         }
 
-        saveCurrentDrawing(mode, resultCode, resultData)
+        // Cache the grant so later screen saves in this session skip the consent dialog.
+        if (!rememberScreenCaptureGrant(resultCode, resultData)) {
+            Toast.makeText(
+                this,
+                getString(R.string.export_failed),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        saveCurrentDrawing(mode)
+    }
+
+    /**
+     * 是否已有可复用的屏幕捕获授权。
+     * API 34+：授权 Intent 一次性，必须持有 MediaProjection 实例复用。
+     * API 33：可缓存 resultCode/data 复用 token。
+     */
+    private fun hasReusableScreenCaptureGrant(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            cachedProjection != null
+        } else {
+            cachedProjectionCode != null && cachedProjectionData != null
+        }
+    }
+
+    /**
+     * 记住本次授权。API 34+ 立刻换取并持有 MediaProjection。
+     * @return 是否成功建立可复用授权
+     */
+    private fun rememberScreenCaptureGrant(resultCode: Int, resultData: Intent): Boolean {
+        cachedProjectionCode = resultCode
+        cachedProjectionData = resultData
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            if (cachedProjection == null) {
+                elevateForegroundForScreenCapture()
+                val mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
+                val projection = mediaProjectionManager.getMediaProjection(resultCode, resultData)
+                    ?: run {
+                        restoreRegularForegroundType()
+                        return false
+                    }
+                val callback = object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        // User revoked from the system indicator — drop the cache.
+                        clearScreenCaptureGrant(stopProjection = false)
+                    }
+                }
+                val handler = Handler(Looper.getMainLooper())
+                runCatching { projection.registerCallback(callback, handler) }
+                cachedProjectionCallback = callback
+                cachedProjection = projection
+            }
+        }
+        return hasReusableScreenCaptureGrant()
+    }
+
+    private fun clearScreenCaptureGrant(stopProjection: Boolean = true) {
+        projectionReleaseJob?.cancel()
+        projectionReleaseJob = null
+        cachedProjectionCallback?.let { callback ->
+            runCatching { cachedProjection?.unregisterCallback(callback) }
+        }
+        cachedProjectionCallback = null
+        if (stopProjection) {
+            runCatching { cachedProjection?.stop() }
+        }
+        cachedProjection = null
+        cachedProjectionCode = null
+        cachedProjectionData = null
+        restoreRegularForegroundType()
+    }
+
+    private fun scheduleProjectionIdleRelease() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        projectionReleaseJob?.cancel()
+        projectionReleaseJob = serviceScope.launch {
+            delay(PROJECTION_IDLE_RELEASE_MS)
+            clearScreenCaptureGrant(stopProjection = true)
+        }
+    }
+
+    /** 取出用于本次截屏的 MediaProjection。API 34+ 复用持有实例；API 33 用缓存 token 换取。 */
+    private fun obtainProjectionForCapture(): MediaProjection? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return cachedProjection
+        }
+        val code = cachedProjectionCode ?: return null
+        val data = cachedProjectionData ?: return null
+        val mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
+        return mediaProjectionManager.getMediaProjection(code, data)
     }
 
     private fun elevateForegroundForScreenCapture() {
@@ -493,12 +595,22 @@ class MainService : Service() {
     private fun saveCurrentDrawing(
         mode: ExportMode,
         screenCaptureResultCode: Int? = null,
-        screenCaptureData: Intent? = null,
+        screenCaptureResultData: Intent? = null,
     ) {
-        if (mode == ExportMode.Screen && (screenCaptureResultCode == null || screenCaptureData == null)) {
-            pendingExportMode = mode
-            requestScreenCapturePermission()
-            return
+        if (mode == ExportMode.Screen) {
+            // Prefer an already-granted session so the user only consents once.
+            if (!hasReusableScreenCaptureGrant()) {
+                if (screenCaptureResultCode == null || screenCaptureResultData == null) {
+                    pendingExportMode = mode
+                    requestScreenCapturePermission()
+                    return
+                }
+                if (!rememberScreenCaptureGrant(screenCaptureResultCode, screenCaptureResultData)) {
+                    pendingExportMode = mode
+                    requestScreenCapturePermission()
+                    return
+                }
+            }
         }
 
         serviceScope.launch {
@@ -506,10 +618,7 @@ class MainService : Service() {
                 val bitmap = when (mode) {
                     ExportMode.Transparent -> canvasView.renderToBitmap(backgroundColor = null)
                     ExportMode.Paper -> canvasView.renderToBitmap(backgroundColor = 0xFFF7F0E5.toInt())
-                    ExportMode.Screen -> renderScreenBackdropExport(
-                        screenCaptureResultCode = requireNotNull(screenCaptureResultCode),
-                        screenCaptureData = requireNotNull(screenCaptureData),
-                    )
+                    ExportMode.Screen -> renderScreenBackdropExport()
                 }
                 withContext(Dispatchers.IO) {
                     saveBitmap(bitmap, mode).getOrThrow()
@@ -533,15 +642,14 @@ class MainService : Service() {
         }
     }
 
-    private suspend fun renderScreenBackdropExport(
-        screenCaptureResultCode: Int,
-        screenCaptureData: Intent,
-    ): Bitmap {
+    private suspend fun renderScreenBackdropExport(): Bitmap {
         val drawingBitmap = canvasView.renderToBitmap(backgroundColor = null)
         val backgroundBitmap = try {
-            captureBackgroundBitmap(screenCaptureResultCode, screenCaptureData)
+            captureBackgroundBitmap()
         } catch (error: Throwable) {
             drawingBitmap.recycle()
+            // Token/projection may have gone stale — force a re-prompt next time.
+            clearScreenCaptureGrant()
             throw error
         }
 
@@ -561,70 +669,100 @@ class MainService : Service() {
         }
     }
 
-    private suspend fun captureBackgroundBitmap(
-        screenCaptureResultCode: Int,
-        screenCaptureData: Intent,
-    ): Bitmap {
+    private suspend fun captureBackgroundBitmap(): Bitmap {
         val canvasWasVisible = canvasView.visibility == View.VISIBLE
-        val toolbarWasVisible = toolbarView.visibility == View.VISIBLE
+        val toolbarViewWasVisible = toolbarView.visibility == View.VISIBLE
         val dismissWasVisible = dismissTargetView.visibility == View.VISIBLE
+        val toolbarDialogWasShowing = ::toolbarDialog.isInitialized && toolbarDialog.isShowing
+        val settingsDialogWasShowing = settingsDialog?.isShowing == true
 
-        toolbarView.visibility = View.INVISIBLE
+        // Hide every overlay window — including Dialog window backgrounds —
+        // otherwise the translucent blurred toolbar frame shows up in the capture.
         canvasView.visibility = View.INVISIBLE
         dismissTargetView.visibility = View.INVISIBLE
+        toolbarView.visibility = View.INVISIBLE
+        if (toolbarDialogWasShowing) {
+            toolbarDialog.window?.decorView?.visibility = View.INVISIBLE
+            toolbarDialog.hide()
+        }
+        settingsDialog?.let { dialog ->
+            dialog.window?.decorView?.visibility = View.INVISIBLE
+            dialog.hide()
+        }
 
         return try {
-            delay(120)
+            // Wait long enough for SurfaceFlinger to drop the hidden windows from composition.
+            delay(250)
             withTimeout(5_000) {
-                captureScreenBitmap(screenCaptureResultCode, screenCaptureData)
+                captureScreenBitmap()
             }
         } finally {
-            toolbarView.visibility = if (toolbarWasVisible) View.VISIBLE else View.INVISIBLE
+            if (toolbarDialogWasShowing) {
+                toolbarDialog.show()
+                toolbarDialog.window?.decorView?.visibility = View.VISIBLE
+            }
+            if (settingsDialogWasShowing) {
+                settingsDialog?.show()
+                settingsDialog?.window?.decorView?.visibility = View.VISIBLE
+            }
+            toolbarView.visibility = if (toolbarViewWasVisible) View.VISIBLE else View.INVISIBLE
             canvasView.visibility = if (canvasWasVisible) View.VISIBLE else View.INVISIBLE
             dismissTargetView.visibility = if (dismissWasVisible) View.VISIBLE else View.GONE
         }
     }
 
-    private suspend fun captureScreenBitmap(
-        screenCaptureResultCode: Int,
-        screenCaptureData: Intent,
-    ): Bitmap = suspendCancellableCoroutine { continuation ->
+    private suspend fun captureScreenBitmap(): Bitmap = suspendCancellableCoroutine { continuation ->
         elevateForegroundForScreenCapture()
         val width = canvasView.width.coerceAtLeast(1)
         val height = canvasView.height.coerceAtLeast(1)
         val densityDpi = resources.displayMetrics.densityDpi
         val imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        val mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
-        val mediaProjection = mediaProjectionManager.getMediaProjection(screenCaptureResultCode, screenCaptureData)
+        val reuseCachedProjection =
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && cachedProjection != null
+        val mediaProjection = obtainProjectionForCapture()
             ?: run {
                 imageReader.close()
+                restoreRegularForegroundType()
                 continuation.resumeWithException(IllegalStateException("MediaProjection was unavailable"))
                 return@suspendCancellableCoroutine
             }
         val handler = Handler(Looper.getMainLooper())
         var virtualDisplay: VirtualDisplay? = null
         var cleanedUp = false
-        lateinit var projectionCallback: MediaProjection.Callback
+        var localCallback: MediaProjection.Callback? = null
 
-        fun cleanUp(stopProjection: Boolean = true) {
+        fun cleanUp() {
             if (cleanedUp) return
             cleanedUp = true
             imageReader.setOnImageAvailableListener(null, null)
             runCatching { virtualDisplay?.release() }
-            runCatching { mediaProjection.unregisterCallback(projectionCallback) }
-            if (stopProjection) runCatching { mediaProjection.stop() }
-            runCatching { imageReader.close() }
-            restoreRegularForegroundType()
-        }
-        projectionCallback = object : MediaProjection.Callback() {
-            override fun onStop() {
-                if (continuation.isActive) {
-                    continuation.resumeWithException(IllegalStateException("MediaProjection stopped"))
-                }
-                cleanUp(stopProjection = false)
+            localCallback?.let { cb -> runCatching { mediaProjection.unregisterCallback(cb) } }
+            // Cached projections stay alive so the next save skips the consent dialog.
+            // Released on service destroy or after a long idle window.
+            if (!reuseCachedProjection) {
+                runCatching { mediaProjection.stop() }
+                restoreRegularForegroundType()
+            } else {
+                scheduleProjectionIdleRelease()
             }
+            runCatching { imageReader.close() }
         }
-        mediaProjection.registerCallback(projectionCallback, handler)
+        // Only watch for unexpected stops on non-cached captures (or when no cache callback exists).
+        if (!reuseCachedProjection || cachedProjectionCallback == null) {
+            val projectionCallback = object : MediaProjection.Callback() {
+                override fun onStop() {
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(IllegalStateException("MediaProjection stopped"))
+                    }
+                    cleanUp()
+                    if (reuseCachedProjection) {
+                        clearScreenCaptureGrant(stopProjection = false)
+                    }
+                }
+            }
+            localCallback = projectionCallback
+            mediaProjection.registerCallback(projectionCallback, handler)
+        }
 
         imageReader.setOnImageAvailableListener({ reader ->
             val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
@@ -765,6 +903,8 @@ class MainService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        clearScreenCaptureGrant(stopProjection = true)
+        com.shezik.drawanywhere.stylus.FocusPenGestureDetector.reset()
         if (DrawSessionBridge.viewModel === viewModel) {
             DrawSessionBridge.viewModel = null
         }

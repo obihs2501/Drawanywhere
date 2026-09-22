@@ -54,6 +54,10 @@ class PreferencesManager(private val context: Context) {
         val STYLUS_BUTTON_SCHEME = stringPreferencesKey("stylus_button_scheme")
         val STYLUS_PRIMARY_BUTTON_ACTION = stringPreferencesKey("stylus_primary_button_action")
         val STYLUS_SECONDARY_BUTTON_ACTION = stringPreferencesKey("stylus_secondary_button_action")
+        val FOCUS_PEN_SQUEEZE_ACTION = stringPreferencesKey("focus_pen_squeeze_action")
+        val FOCUS_PEN_MULTI_TAP_ACTION = stringPreferencesKey("focus_pen_multi_tap_action")
+        val FOCUS_PEN_SLIDE_UP_ACTION = stringPreferencesKey("focus_pen_slide_up_action")
+        val FOCUS_PEN_SLIDE_DOWN_ACTION = stringPreferencesKey("focus_pen_slide_down_action")
         val PRESSURE_ERASER_ENABLED = booleanPreferencesKey("pressure_eraser_enabled")
         val PRESSURE_ERASER_THRESHOLD = floatPreferencesKey("pressure_eraser_threshold")
         val RECENT_COLORS = stringPreferencesKey("recent_colors")
@@ -133,6 +137,22 @@ class PreferencesManager(private val context: Context) {
             preferences[PreferencesKeys.STYLUS_SECONDARY_BUTTON_ACTION],
             defaultUiState.stylusSecondaryButtonAction
         )
+        val focusPenSqueezeAction = getEnumValueOrDefault<StylusButtonAction>(
+            preferences[PreferencesKeys.FOCUS_PEN_SQUEEZE_ACTION],
+            defaultUiState.focusPenSqueezeAction
+        )
+        val focusPenMultiTapAction = getEnumValueOrDefault<StylusButtonAction>(
+            preferences[PreferencesKeys.FOCUS_PEN_MULTI_TAP_ACTION],
+            defaultUiState.focusPenMultiTapAction
+        )
+        val focusPenSlideUpAction = getEnumValueOrDefault<StylusButtonAction>(
+            preferences[PreferencesKeys.FOCUS_PEN_SLIDE_UP_ACTION],
+            defaultUiState.focusPenSlideUpAction
+        )
+        val focusPenSlideDownAction = getEnumValueOrDefault<StylusButtonAction>(
+            preferences[PreferencesKeys.FOCUS_PEN_SLIDE_DOWN_ACTION],
+            defaultUiState.focusPenSlideDownAction
+        )
         val pressureEraserEnabled = preferences[PreferencesKeys.PRESSURE_ERASER_ENABLED]
             ?: defaultUiState.pressureEraserEnabled
         val pressureEraserThreshold = preferences[PreferencesKeys.PRESSURE_ERASER_THRESHOLD]
@@ -170,6 +190,10 @@ class PreferencesManager(private val context: Context) {
             stylusButtonScheme = stylusButtonScheme,
             stylusPrimaryButtonAction = stylusPrimaryButtonAction,
             stylusSecondaryButtonAction = stylusSecondaryButtonAction,
+            focusPenSqueezeAction = focusPenSqueezeAction,
+            focusPenMultiTapAction = focusPenMultiTapAction,
+            focusPenSlideUpAction = focusPenSlideUpAction,
+            focusPenSlideDownAction = focusPenSlideDownAction,
             pressureEraserEnabled = pressureEraserEnabled,
             pressureEraserThreshold = pressureEraserThreshold,
             recentColors = recentColors,
@@ -197,6 +221,10 @@ class PreferencesManager(private val context: Context) {
             preferences[PreferencesKeys.STYLUS_BUTTON_SCHEME] = uiState.stylusButtonScheme.name
             preferences[PreferencesKeys.STYLUS_PRIMARY_BUTTON_ACTION] = uiState.stylusPrimaryButtonAction.name
             preferences[PreferencesKeys.STYLUS_SECONDARY_BUTTON_ACTION] = uiState.stylusSecondaryButtonAction.name
+            preferences[PreferencesKeys.FOCUS_PEN_SQUEEZE_ACTION] = uiState.focusPenSqueezeAction.name
+            preferences[PreferencesKeys.FOCUS_PEN_MULTI_TAP_ACTION] = uiState.focusPenMultiTapAction.name
+            preferences[PreferencesKeys.FOCUS_PEN_SLIDE_UP_ACTION] = uiState.focusPenSlideUpAction.name
+            preferences[PreferencesKeys.FOCUS_PEN_SLIDE_DOWN_ACTION] = uiState.focusPenSlideDownAction.name
             preferences[PreferencesKeys.PRESSURE_ERASER_ENABLED] = uiState.pressureEraserEnabled
             preferences[PreferencesKeys.PRESSURE_ERASER_THRESHOLD] = uiState.pressureEraserThreshold
             preferences[PreferencesKeys.RECENT_COLORS] = uiState.recentColors.joinToString(",") { it.toArgb().toString(16).padStart(8, '0') }

@@ -219,7 +219,7 @@ private fun StylusSettingsPage(
             value = stylusButtonSchemeLabel(stylusButtonScheme),
             onClick = onSchemeClick
         )
-        if (stylusButtonScheme != StylusButtonScheme.Disabled) {
+        if (stylusButtonScheme == StylusButtonScheme.XiaomiSmartPen) {
             NavigationControl(
                 label = stringResource(R.string.stylus_primary_button_action),
                 value = stylusButtonActionLabel(stylusPrimaryButtonAction),
@@ -229,6 +229,14 @@ private fun StylusSettingsPage(
                 label = stringResource(R.string.stylus_secondary_button_action),
                 value = stylusButtonActionLabel(stylusSecondaryButtonAction),
                 onClick = onSecondaryActionClick
+            )
+        }
+        if (stylusButtonScheme == StylusButtonScheme.XiaomiFocusPen) {
+            Text(
+                text = stringResource(R.string.focus_pen_settings_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.sm),
             )
         }
         CheckboxControl(
@@ -313,6 +321,7 @@ private fun stylusButtonSchemeLabel(scheme: StylusButtonScheme): String =
     when (scheme) {
         StylusButtonScheme.Disabled -> stringResource(R.string.stylus_button_scheme_disabled)
         StylusButtonScheme.XiaomiSmartPen -> stringResource(R.string.stylus_button_scheme_xiaomi)
+        StylusButtonScheme.XiaomiFocusPen -> stringResource(R.string.stylus_button_scheme_focus)
     }
 
 @Composable
@@ -327,6 +336,7 @@ private fun stylusButtonActionLabel(action: StylusButtonAction): String =
         StylusButtonAction.ToggleCanvasVisibility -> stringResource(R.string.stylus_action_toggle_canvas)
         StylusButtonAction.ToggleCanvasPassthrough -> stringResource(R.string.stylus_action_toggle_passthrough)
         StylusButtonAction.ToggleLaser -> stringResource(R.string.laser)
+        StylusButtonAction.SwitchPreviousPen -> stringResource(R.string.stylus_action_switch_previous_pen)
     }
 
 @Composable

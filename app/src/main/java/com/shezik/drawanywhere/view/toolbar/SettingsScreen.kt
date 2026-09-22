@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import com.shezik.drawanywhere.BuildConfig
 import com.shezik.drawanywhere.DrawViewModel
 import com.shezik.drawanywhere.R
+import com.shezik.drawanywhere.model.FocusPenGesture
 import com.shezik.drawanywhere.model.PRESET_COLORS
 import com.shezik.drawanywhere.model.StylusButtonAction
 import com.shezik.drawanywhere.model.StylusButtonScheme
@@ -185,7 +186,7 @@ fun SettingsScreen(
                             },
                         )
 
-                        if (uiState.stylusButtonScheme != StylusButtonScheme.Disabled) {
+                        if (uiState.stylusButtonScheme == StylusButtonScheme.XiaomiSmartPen) {
                             HorizontalDivider()
                             OverlayDropdownPreference(
                                 title = stringResource(R.string.stylus_primary_button_action),
@@ -210,6 +211,33 @@ fun SettingsScreen(
                                     viewModel.setStylusSecondaryButtonAction(StylusButtonAction.entries[index])
                                 },
                             )
+                        }
+
+                        if (uiState.stylusButtonScheme == StylusButtonScheme.XiaomiFocusPen) {
+                            HorizontalDivider()
+                            Text(
+                                text = stringResource(R.string.focus_pen_settings_hint),
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+                            )
+                            for (gesture in FocusPenGesture.entries) {
+                                HorizontalDivider()
+                                OverlayDropdownPreference(
+                                    title = focusPenGestureLabel(gesture),
+                                    items = stylusActionLabels(),
+                                    selectedIndex = selectedIndexOf(
+                                        value = uiState.focusPenGestureAction(gesture),
+                                        values = StylusButtonAction.entries,
+                                    ),
+                                    onSelectedIndexChange = { index ->
+                                        viewModel.setFocusPenGestureAction(
+                                            gesture,
+                                            StylusButtonAction.entries[index],
+                                        )
+                                    },
+                                )
+                            }
                         }
 
                         HorizontalDivider()
@@ -500,6 +528,7 @@ private fun stylusSchemeLabels(): List<String> = StylusButtonScheme.entries.map 
     when (it) {
         StylusButtonScheme.Disabled -> stringResource(R.string.stylus_button_scheme_disabled)
         StylusButtonScheme.XiaomiSmartPen -> stringResource(R.string.stylus_button_scheme_xiaomi)
+        StylusButtonScheme.XiaomiFocusPen -> stringResource(R.string.stylus_button_scheme_focus)
     }
 }
 
@@ -515,8 +544,18 @@ private fun stylusActionLabels(): List<String> = StylusButtonAction.entries.map 
         StylusButtonAction.ToggleCanvasVisibility -> stringResource(R.string.stylus_action_toggle_canvas)
         StylusButtonAction.ToggleCanvasPassthrough -> stringResource(R.string.stylus_action_toggle_passthrough)
         StylusButtonAction.ToggleLaser -> stringResource(R.string.laser)
+        StylusButtonAction.SwitchPreviousPen -> stringResource(R.string.stylus_action_switch_previous_pen)
     }
 }
+
+@Composable
+private fun focusPenGestureLabel(gesture: FocusPenGesture): String =
+    when (gesture) {
+        FocusPenGesture.Squeeze -> stringResource(R.string.focus_pen_gesture_squeeze)
+        FocusPenGesture.MultiTap -> stringResource(R.string.focus_pen_gesture_multi_tap)
+        FocusPenGesture.SlideUp -> stringResource(R.string.focus_pen_gesture_slide_up)
+        FocusPenGesture.SlideDown -> stringResource(R.string.focus_pen_gesture_slide_down)
+    }
 
 @Composable
 private fun pressureThresholdLabels(): List<String> = pressureThresholdOptions.map {
@@ -530,6 +569,16 @@ private val toolbarOrientationValues = listOf(
 
 private fun <T> selectedIndexOf(value: T, values: List<T>): Int =
     values.indexOf(value).takeIf { it >= 0 } ?: 0
+
+private fun com.shezik.drawanywhere.UiState.focusPenGestureAction(
+    gesture: FocusPenGesture,
+): StylusButtonAction =
+    when (gesture) {
+        FocusPenGesture.Squeeze -> focusPenSqueezeAction
+        FocusPenGesture.MultiTap -> focusPenMultiTapAction
+        FocusPenGesture.SlideUp -> focusPenSlideUpAction
+        FocusPenGesture.SlideDown -> focusPenSlideDownAction
+    }
 
 private fun pressureThresholdOption(value: Float): Float =
     pressureThresholdOptions.minBy { kotlin.math.abs(it - value) }

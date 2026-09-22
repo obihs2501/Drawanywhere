@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.toArgb
 import com.shezik.drawanywhere.DrawController
 import com.shezik.drawanywhere.DrawViewModel
 import com.shezik.drawanywhere.model.StylusButtonScheme
+import com.shezik.drawanywhere.stylus.FocusPenGestureDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -89,11 +90,29 @@ class NativeDrawCanvasView(
         touchHandler.handleEvent(event)
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (handleFocusPenKeyEvent(event)) return true
         return handleXiaomiStylusKey(event) || super.dispatchKeyEvent(event)
     }
 
     fun requestStylusKeyFocus() {
         requestFocus()
+    }
+
+    /**
+     * 小米焦点触控笔二代/Pro：轻捏 / 连击 / 上下滑。
+     * 系统以 KeyCode 194–197 直接上报，应用内映射，不依赖系统手写笔设置。
+     */
+    private fun handleFocusPenKeyEvent(event: KeyEvent): Boolean {
+        if (viewModel.uiState.value.stylusButtonScheme != StylusButtonScheme.XiaomiFocusPen) {
+            return false
+        }
+        if (!FocusPenGestureDetector.isGestureKeyCode(event.keyCode)) return false
+        val gesture = FocusPenGestureDetector.consume(event)
+        if (gesture != null) {
+            viewModel.performStylusButtonAction(viewModel.actionForFocusPenGesture(gesture))
+            invalidate()
+        }
+        return true
     }
 
     private fun handleXiaomiStylusKey(event: KeyEvent): Boolean {
@@ -255,11 +274,19 @@ class NativeDrawCanvasView(
         viewportScope = CoroutineScope(Dispatchers.Main).apply {
             launch { viewModel.viewport.collect { invalidate() } }
             launch { viewModel.lockMode.collect { invalidate() } }
+            launch {
+                viewModel.uiState.collect { state ->
+                    if (state.stylusButtonScheme != StylusButtonScheme.XiaomiFocusPen) {
+                        FocusPenGestureDetector.reset()
+                    }
+                }
+            }
         }
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
+        FocusPenGestureDetector.reset()
         viewportScope?.cancel()
         removeCallbacks(null)
     }

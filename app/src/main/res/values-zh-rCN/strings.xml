@@ -33,6 +33,7 @@
     <string name="stylus_settings">手写笔设置</string>
     <string name="stylus_button_scheme_disabled">关闭</string>
     <string name="stylus_button_scheme_xiaomi">小米灵感触控笔</string>
+    <string name="stylus_button_scheme_focus">小米焦点触控笔</string>
     <string name="stylus_primary_button_action">主键</string>
     <string name="stylus_secondary_button_action">副键</string>
     <string name="stylus_action_none">无操作</string>
@@ -41,6 +42,12 @@
     <string name="stylus_action_pixel_eraser">切换像素橡皮</string>
     <string name="stylus_action_toggle_canvas">切换画布显示</string>
     <string name="stylus_action_toggle_passthrough">切换触摸透传</string>
+    <string name="stylus_action_switch_previous_pen">切换上次笔刷</string>
+    <string name="focus_pen_gesture_squeeze">轻捏</string>
+    <string name="focus_pen_gesture_multi_tap">连击（双击）</string>
+    <string name="focus_pen_gesture_slide_up">笔身上滑</string>
+    <string name="focus_pen_gesture_slide_down">笔身下滑</string>
+    <string name="focus_pen_settings_hint">手势在应用内独立映射，不改动系统手写笔设置；无需小米开放平台申请即可使用。</string>
     <string name="pressure_eraser">压力橡皮</string>
     <string name="pressure_eraser_desc">压力超过设定阈值时自动切换到擦除。</string>
     <string name="pressure_eraser_threshold">压力橡皮阈值</string>
@@ -79,6 +86,7 @@
     <string name="export_success">已保存为 %1$s</string>
     <string name="export_failed">保存当前绘制失败。</string>
     <string name="screen_capture_permission_denied">你拒绝了屏幕截图授权，因此无法保存屏幕背景。</string>
+    <string name="screen_capture_permission_rationale">仅用于「屏幕背景 PNG」导出。同意一次后，本次运行内保存会复用该授权，无需每次都点确认。</string>
     <string name="enable_passthrough">启用触摸透传</string>
     <string name="lock_zoom">锁定缩放</string>
     <string name="lock_all">全部锁定</string>

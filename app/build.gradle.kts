@@ -122,6 +122,12 @@ dependencies {
     implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.2")
     implementation("top.yukonga.miuix.kmp:miuix-preference-android:0.9.2")
     implementation("androidx.navigationevent:navigationevent-compose:1.1.1")
+
+    // Optional: Xiaomi PenEngine AAR (app/libs/PenEngine*.aar).
+    // NOT required for Focus Touch Pen gestures — those are handled natively via
+    // KeyEvent 194–197 (see FocusPenGestureDetector) and need no Open Platform App ID.
+    // Keep the AAR here only if you later add stroke-prediction / one-stroke / OCR.
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("PenEngine*.aar"))))
 }
 
 // Disable baseline.prof for reproducibility

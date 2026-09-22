@@ -1,0 +1,3 @@
+# Xiaomi PenEngine AAR is proprietary — do not commit.
+# Gestures work without it (FocusPenGestureDetector uses raw KeyEvents).
+PenEngine*.aar
