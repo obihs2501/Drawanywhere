@@ -21,6 +21,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.shezik.drawanywhere.model.FocusPenGesture
+import com.shezik.drawanywhere.model.FocusPenLinkState
 import com.shezik.drawanywhere.model.PenConfig
 import com.shezik.drawanywhere.model.PenType
 import com.shezik.drawanywhere.model.PRESET_COLORS
@@ -62,6 +64,17 @@ data class UiState(
     val stylusButtonScheme: StylusButtonScheme = StylusButtonScheme.XiaomiSmartPen,
     val stylusPrimaryButtonAction: StylusButtonAction = StylusButtonAction.CyclePresetColor,
     val stylusSecondaryButtonAction: StylusButtonAction = StylusButtonAction.ToggleStrokeEraser,
+    // Xiaomi Focus Pen barrel gestures (scheme XiaomiFocusPen). Mapped in-app only.
+    val focusPenSqueezeAction: StylusButtonAction = StylusButtonAction.CyclePresetColor,
+    val focusPenDoubleTapAction: StylusButtonAction = StylusButtonAction.ToggleStrokeEraser,
+    val focusPenSlideUpAction: StylusButtonAction = StylusButtonAction.IncreaseStrokeWidth,
+    val focusPenSlideDownAction: StylusButtonAction = StylusButtonAction.DecreaseStrokeWidth,
+    /** Show a toast for every key event the canvas receives (troubleshooting). */
+    val keyDiagnosticsEnabled: Boolean = false,
+    /** Keep the MediaProjection session alive so screen saves ask for consent once per run. */
+    val keepScreenCaptureSession: Boolean = true,
+    /** Try `su screencap` first for screen-background saves (rooted devices only). */
+    val rootScreenshotEnabled: Boolean = false,
     val pressureEraserEnabled: Boolean = false,
     val pressureEraserThreshold: Float = 0.85f,
     val recentColors: List<Color> = emptyList(),
@@ -91,6 +104,13 @@ data class UiState(
 ) {
     val currentPenConfig: PenConfig
         get() = penConfigs[currentPenType] ?: PenConfig()
+
+    fun actionForFocusPenGesture(gesture: FocusPenGesture): StylusButtonAction = when (gesture) {
+        FocusPenGesture.Squeeze -> focusPenSqueezeAction
+        FocusPenGesture.DoubleTap -> focusPenDoubleTapAction
+        FocusPenGesture.SlideUp -> focusPenSlideUpAction
+        FocusPenGesture.SlideDown -> focusPenSlideDownAction
+    }
 }
 
 fun defaultQuickLaunchActions(): List<String> = listOf(
@@ -119,9 +139,29 @@ class DrawViewModel(
         const val TOOLBAR_DIM_DELAY_MS = 3_000L
         const val TOOLBAR_DIM_ALPHA = 0.5f
         const val TOOLBAR_DIM_DURATION_MS = 300L
+
+        /** Multiplicative step used by the thicker/thinner stylus actions. */
+        const val STROKE_WIDTH_STEP = 1.25f
+        const val MIN_STROKE_WIDTH_PX = 0.5f
+        const val MAX_STROKE_WIDTH_PX = 400f
     }
     private val _uiState = MutableStateFlow(initialUiState)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    private val _focusPenLinkState = MutableStateFlow(FocusPenLinkState())
+    /** Link to the HyperOS pen service; updated by the service that owns it. */
+    val focusPenLinkState: StateFlow<FocusPenLinkState> = _focusPenLinkState.asStateFlow()
+
+    /** Set by the owning service so settings can re-run the system handshake. */
+    var onRetryFocusPenLink: (() -> Unit)? = null
+
+    fun updateFocusPenLinkState(state: FocusPenLinkState) {
+        _focusPenLinkState.value = state
+    }
+
+    fun retryFocusPenLink() {
+        onRetryFocusPenLink?.invoke()
+    }
 
     private val _serviceState = MutableStateFlow(initialServiceState)
     val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()
@@ -154,14 +194,32 @@ class DrawViewModel(
         dimmingJob?.cancel()
     }
 
-    fun switchToPen(type: PenType) {
+    fun switchToPen(type: PenType) = switchToPen(type, recordHistory = true)
+
+    /**
+     * @param recordHistory false for transient switches (barrel-button erasing)
+     *   that must not become the target of [switchToPreviousPen].
+     */
+    private fun switchToPen(type: PenType, recordHistory: Boolean) {
         if (type.isEraser) lastEraserPenType = type
+        val current = uiState.value.currentPenType
+        if (recordHistory && current != type) previousUserPenType = current
         _uiState.update { it.copy(currentPenType = type) }
         controller.setPenConfig(uiState.value.currentPenConfig)
     }
 
     fun switchToLastEraser() {
         switchToPen(lastEraserPenType.takeIf { it.isEraser } ?: PenType.StrokeEraser)
+    }
+
+    fun switchToPreviousPen() {
+        val target = previousUserPenType ?: PenType.Pen
+        if (target != uiState.value.currentPenType) switchToPen(target)
+    }
+
+    fun stepStrokeWidth(factor: Float) {
+        val current = uiState.value.currentPenConfig.width
+        setStrokeWidth((current * factor).coerceIn(MIN_STROKE_WIDTH_PX, MAX_STROKE_WIDTH_PX))
     }
 
     fun resolvePenType(modifier: StrokeModifier) =
@@ -173,6 +231,8 @@ class DrawViewModel(
         }
 
     private var previousPenType: PenType? = null
+    /** Last pen the user deliberately left; target of [switchToPreviousPen]. */
+    private var previousUserPenType: PenType? = null
     private var isStrokeDown: Boolean = false
     private var stylusEraserReturnPenType: PenType = PenType.Pen
     private var stylusLaserReturnPenType: PenType = PenType.Pen
@@ -188,7 +248,7 @@ class DrawViewModel(
         val newPenType = resolvePenType(modifier)
         if (newPenType != uiState.value.currentPenType) {
             previousPenType = uiState.value.currentPenType
-            switchToPen(newPenType)
+            switchToPen(newPenType, recordHistory = false)
         }
 
         controller.createStroke(sample)
@@ -210,7 +270,7 @@ class DrawViewModel(
         controller.finishStroke()
 
         previousPenType?.let {
-            switchToPen(it)
+            switchToPen(it, recordHistory = false)
             previousPenType = null
         }
         isStrokeDown = false
@@ -291,8 +351,36 @@ class DrawViewModel(
             StylusButtonAction.ToggleCanvasVisibility -> toggleCanvasVisibility()
             StylusButtonAction.ToggleCanvasPassthrough -> toggleCanvasPassthrough()
             StylusButtonAction.ToggleLaser -> toggleLaser()
+            StylusButtonAction.SwitchPreviousPen -> switchToPreviousPen()
+            StylusButtonAction.ClearCanvas -> clearCanvas()
+            StylusButtonAction.IncreaseStrokeWidth -> stepStrokeWidth(STROKE_WIDTH_STEP)
+            StylusButtonAction.DecreaseStrokeWidth -> stepStrokeWidth(1f / STROKE_WIDTH_STEP)
+            StylusButtonAction.ToggleToolbarMinimized -> setToolbarMinimized(!uiState.value.toolbarMinimized)
         }
     }
+
+    fun performFocusPenGesture(gesture: FocusPenGesture) {
+        performStylusButtonAction(uiState.value.actionForFocusPenGesture(gesture))
+    }
+
+    fun setFocusPenGestureAction(gesture: FocusPenGesture, action: StylusButtonAction) =
+        _uiState.update { state ->
+            when (gesture) {
+                FocusPenGesture.Squeeze -> state.copy(focusPenSqueezeAction = action)
+                FocusPenGesture.DoubleTap -> state.copy(focusPenDoubleTapAction = action)
+                FocusPenGesture.SlideUp -> state.copy(focusPenSlideUpAction = action)
+                FocusPenGesture.SlideDown -> state.copy(focusPenSlideDownAction = action)
+            }
+        }
+
+    fun setKeyDiagnosticsEnabled(state: Boolean) =
+        _uiState.update { it.copy(keyDiagnosticsEnabled = state) }
+
+    fun setKeepScreenCaptureSession(state: Boolean) =
+        _uiState.update { it.copy(keepScreenCaptureSession = state) }
+
+    fun setRootScreenshotEnabled(state: Boolean) =
+        _uiState.update { it.copy(rootScreenshotEnabled = state) }
 
     private fun toggleTool(toolType: PenType) {
         val currentType = uiState.value.currentPenType

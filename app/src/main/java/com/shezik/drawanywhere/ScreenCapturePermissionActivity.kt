@@ -2,6 +2,7 @@ package com.shezik.drawanywhere
 
 import android.app.Activity
 import android.content.Intent
+import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
@@ -17,18 +18,23 @@ class ScreenCapturePermissionActivity : ComponentActivity() {
             putExtra(MainService.EXTRA_SCREEN_CAPTURE_RESULT_CODE, result.resultCode)
             putExtra(MainService.EXTRA_SCREEN_CAPTURE_DATA, result.data)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
+        startForegroundService(serviceIntent)
         finishWithoutTransition()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
-        permissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+        // Android 14+: ask for the entire screen up front so the dialog does not
+        // offer the "single app" option, which would only capture one app.
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            mediaProjectionManager.createScreenCaptureIntent(
+                MediaProjectionConfig.createConfigForDefaultDisplay()
+            )
+        } else {
+            mediaProjectionManager.createScreenCaptureIntent()
+        }
+        permissionLauncher.launch(intent)
     }
 
     private fun finishWithoutTransition() {

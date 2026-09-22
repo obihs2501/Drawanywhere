@@ -313,6 +313,7 @@ private fun stylusButtonSchemeLabel(scheme: StylusButtonScheme): String =
     when (scheme) {
         StylusButtonScheme.Disabled -> stringResource(R.string.stylus_button_scheme_disabled)
         StylusButtonScheme.XiaomiSmartPen -> stringResource(R.string.stylus_button_scheme_xiaomi)
+        StylusButtonScheme.XiaomiFocusPen -> stringResource(R.string.stylus_button_scheme_focus_pen)
     }
 
 @Composable
@@ -327,6 +328,11 @@ private fun stylusButtonActionLabel(action: StylusButtonAction): String =
         StylusButtonAction.ToggleCanvasVisibility -> stringResource(R.string.stylus_action_toggle_canvas)
         StylusButtonAction.ToggleCanvasPassthrough -> stringResource(R.string.stylus_action_toggle_passthrough)
         StylusButtonAction.ToggleLaser -> stringResource(R.string.laser)
+        StylusButtonAction.SwitchPreviousPen -> stringResource(R.string.stylus_action_previous_pen)
+        StylusButtonAction.ClearCanvas -> stringResource(R.string.clear_canvas)
+        StylusButtonAction.IncreaseStrokeWidth -> stringResource(R.string.stylus_action_increase_width)
+        StylusButtonAction.DecreaseStrokeWidth -> stringResource(R.string.stylus_action_decrease_width)
+        StylusButtonAction.ToggleToolbarMinimized -> stringResource(R.string.stylus_action_toggle_toolbar)
     }
 
 @Composable

@@ -48,6 +48,8 @@ import androidx.compose.ui.unit.dp
 import com.shezik.drawanywhere.BuildConfig
 import com.shezik.drawanywhere.DrawViewModel
 import com.shezik.drawanywhere.R
+import com.shezik.drawanywhere.model.FocusPenGesture
+import com.shezik.drawanywhere.model.FocusPenLinkState
 import com.shezik.drawanywhere.model.PRESET_COLORS
 import com.shezik.drawanywhere.model.StylusButtonAction
 import com.shezik.drawanywhere.model.StylusButtonScheme
@@ -82,6 +84,7 @@ fun SettingsScreen(
     onChooseSaveLocation: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val focusPenLink by viewModel.focusPenLinkState.collectAsState()
     val activity = LocalContext.current as? Activity
     val close: () -> Unit = onClose ?: { activity?.finish() }
 
@@ -185,30 +188,64 @@ fun SettingsScreen(
                             },
                         )
 
+                        when (uiState.stylusButtonScheme) {
+                            StylusButtonScheme.Disabled -> Unit
+                            StylusButtonScheme.XiaomiSmartPen -> {
+                                HorizontalDivider()
+                                OverlayDropdownPreference(
+                                    title = stringResource(R.string.stylus_primary_button_action),
+                                    items = stylusActionLabels(),
+                                    selectedIndex = selectedIndexOf(
+                                        value = uiState.stylusPrimaryButtonAction,
+                                        values = StylusButtonAction.entries,
+                                    ),
+                                    onSelectedIndexChange = { index ->
+                                        viewModel.setStylusPrimaryButtonAction(StylusButtonAction.entries[index])
+                                    },
+                                )
+                                HorizontalDivider()
+                                OverlayDropdownPreference(
+                                    title = stringResource(R.string.stylus_secondary_button_action),
+                                    items = stylusActionLabels(),
+                                    selectedIndex = selectedIndexOf(
+                                        value = uiState.stylusSecondaryButtonAction,
+                                        values = StylusButtonAction.entries,
+                                    ),
+                                    onSelectedIndexChange = { index ->
+                                        viewModel.setStylusSecondaryButtonAction(StylusButtonAction.entries[index])
+                                    },
+                                )
+                            }
+                            StylusButtonScheme.XiaomiFocusPen -> {
+                                FocusPenGesture.entries.forEach { gesture ->
+                                    HorizontalDivider()
+                                    OverlayDropdownPreference(
+                                        title = focusPenGestureLabel(gesture),
+                                        items = stylusActionLabels(),
+                                        selectedIndex = selectedIndexOf(
+                                            value = uiState.actionForFocusPenGesture(gesture),
+                                            values = StylusButtonAction.entries,
+                                        ),
+                                        onSelectedIndexChange = { index ->
+                                            viewModel.setFocusPenGestureAction(gesture, StylusButtonAction.entries[index])
+                                        },
+                                    )
+                                }
+                                HorizontalDivider()
+                                FocusPenLinkStatus(
+                                    state = focusPenLink,
+                                    onRetry = viewModel::retryFocusPenLink,
+                                )
+                            }
+                        }
+
                         if (uiState.stylusButtonScheme != StylusButtonScheme.Disabled) {
                             HorizontalDivider()
-                            OverlayDropdownPreference(
-                                title = stringResource(R.string.stylus_primary_button_action),
-                                items = stylusActionLabels(),
-                                selectedIndex = selectedIndexOf(
-                                    value = uiState.stylusPrimaryButtonAction,
-                                    values = StylusButtonAction.entries,
-                                ),
-                                onSelectedIndexChange = { index ->
-                                    viewModel.setStylusPrimaryButtonAction(StylusButtonAction.entries[index])
-                                },
-                            )
-                            HorizontalDivider()
-                            OverlayDropdownPreference(
-                                title = stringResource(R.string.stylus_secondary_button_action),
-                                items = stylusActionLabels(),
-                                selectedIndex = selectedIndexOf(
-                                    value = uiState.stylusSecondaryButtonAction,
-                                    values = StylusButtonAction.entries,
-                                ),
-                                onSelectedIndexChange = { index ->
-                                    viewModel.setStylusSecondaryButtonAction(StylusButtonAction.entries[index])
-                                },
+                            SwitchPreference(
+                                title = stringResource(R.string.key_diagnostics),
+                                summary = stringResource(R.string.key_diagnostics_desc),
+                                checked = uiState.keyDiagnosticsEnabled,
+                                onCheckedChange = viewModel::setKeyDiagnosticsEnabled,
                             )
                         }
 
@@ -240,6 +277,24 @@ fun SettingsScreen(
                             onAddColor = viewModel::addStylusCycleColor,
                             onRemoveColor = viewModel::removeStylusCycleColor,
                             onReset = viewModel::resetStylusCycleColors,
+                        )
+                    }
+                }
+
+                item {
+                    PreferenceSection(title = stringResource(R.string.settings_capture_section)) {
+                        SwitchPreference(
+                            title = stringResource(R.string.keep_screen_capture_session),
+                            summary = stringResource(R.string.keep_screen_capture_session_desc),
+                            checked = uiState.keepScreenCaptureSession,
+                            onCheckedChange = viewModel::setKeepScreenCaptureSession,
+                        )
+                        HorizontalDivider()
+                        SwitchPreference(
+                            title = stringResource(R.string.root_screenshot),
+                            summary = stringResource(R.string.root_screenshot_desc),
+                            checked = uiState.rootScreenshotEnabled,
+                            onCheckedChange = viewModel::setRootScreenshotEnabled,
                         )
                     }
                 }
@@ -496,10 +551,69 @@ private fun AboutContent() {
 }
 
 @Composable
+private fun FocusPenLinkStatus(
+    state: FocusPenLinkState,
+    onRetry: () -> Unit,
+) {
+    val phaseText = when (state.phase) {
+        FocusPenLinkState.Phase.Idle -> stringResource(R.string.focus_pen_link_idle)
+        FocusPenLinkState.Phase.ServiceMissing -> stringResource(R.string.focus_pen_link_missing)
+        FocusPenLinkState.Phase.Binding -> stringResource(R.string.focus_pen_link_binding)
+        FocusPenLinkState.Phase.Connected -> stringResource(R.string.focus_pen_link_connected)
+        FocusPenLinkState.Phase.Disconnected -> stringResource(R.string.focus_pen_link_disconnected)
+        FocusPenLinkState.Phase.Failed -> stringResource(R.string.focus_pen_link_failed, state.detail ?: "")
+    }
+    val detailText = stringResource(
+        R.string.focus_pen_link_detail,
+        yesNoUnknown(state.sdkInitOk),
+        yesNoUnknown(state.engineJarPresent),
+        state.enableResult?.toString() ?: stringResource(R.string.value_unknown),
+    )
+    ArrowPreference(
+        title = stringResource(R.string.focus_pen_link_status),
+        summary = "$phaseText\n$detailText",
+        onClick = onRetry,
+        bottomAction = {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.focus_pen_link_desc),
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                TextButton(
+                    text = stringResource(R.string.focus_pen_link_retry),
+                    onClick = onRetry,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+    )
+}
+
+@Composable
+private fun yesNoUnknown(value: Boolean?): String = when (value) {
+    true -> stringResource(R.string.value_yes)
+    false -> stringResource(R.string.value_no)
+    null -> stringResource(R.string.value_unknown)
+}
+
+@Composable
+private fun focusPenGestureLabel(gesture: FocusPenGesture): String = when (gesture) {
+    FocusPenGesture.Squeeze -> stringResource(R.string.focus_pen_squeeze)
+    FocusPenGesture.DoubleTap -> stringResource(R.string.focus_pen_double_tap)
+    FocusPenGesture.SlideUp -> stringResource(R.string.focus_pen_slide_up)
+    FocusPenGesture.SlideDown -> stringResource(R.string.focus_pen_slide_down)
+}
+
+@Composable
 private fun stylusSchemeLabels(): List<String> = StylusButtonScheme.entries.map {
     when (it) {
         StylusButtonScheme.Disabled -> stringResource(R.string.stylus_button_scheme_disabled)
         StylusButtonScheme.XiaomiSmartPen -> stringResource(R.string.stylus_button_scheme_xiaomi)
+        StylusButtonScheme.XiaomiFocusPen -> stringResource(R.string.stylus_button_scheme_focus_pen)
     }
 }
 
@@ -515,6 +629,11 @@ private fun stylusActionLabels(): List<String> = StylusButtonAction.entries.map 
         StylusButtonAction.ToggleCanvasVisibility -> stringResource(R.string.stylus_action_toggle_canvas)
         StylusButtonAction.ToggleCanvasPassthrough -> stringResource(R.string.stylus_action_toggle_passthrough)
         StylusButtonAction.ToggleLaser -> stringResource(R.string.laser)
+        StylusButtonAction.SwitchPreviousPen -> stringResource(R.string.stylus_action_previous_pen)
+        StylusButtonAction.ClearCanvas -> stringResource(R.string.clear_canvas)
+        StylusButtonAction.IncreaseStrokeWidth -> stringResource(R.string.stylus_action_increase_width)
+        StylusButtonAction.DecreaseStrokeWidth -> stringResource(R.string.stylus_action_decrease_width)
+        StylusButtonAction.ToggleToolbarMinimized -> stringResource(R.string.stylus_action_toggle_toolbar)
     }
 }
 

@@ -1,0 +1,68 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # ubuntu-latest ships the Android SDK (ANDROID_SDK_ROOT). Do NOT use
+      # android-actions/setup-android here: it tries to install the removed
+      # legacy 'tools' package and fails with "Failed to find package 'tools'".
+      - name: Accept Android SDK licenses
+        run: |
+          SDKMANAGER="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}" -type f -name sdkmanager 2>/dev/null | head -n 1)"
+          if [ -n "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          fi
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+
+      - name: Show toolchain versions
+        run: |
+          java -version
+          ./gradlew --version
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Upload unit test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests
+          if-no-files-found: ignore
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: drawanywhere-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

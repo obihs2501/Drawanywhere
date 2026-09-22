@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.toArgb
 import com.shezik.drawanywhere.DrawController
 import com.shezik.drawanywhere.DrawViewModel
 import com.shezik.drawanywhere.model.StylusButtonScheme
+import com.shezik.drawanywhere.stylus.FocusPenGestureDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -108,12 +109,46 @@ class NativeDrawCanvasView(
         return touchHandler.handleEvent(event)
     }
 
+    /**
+     * Receives every key event that reaches the canvas when
+     * [DrawViewModel.uiState].keyDiagnosticsEnabled is on. Set by the service
+     * (shows a toast + log) so users can verify whether HyperOS delivers the
+     * Focus Pen key codes to this window at all.
+     */
+    var onKeyDiagnostic: ((KeyEvent) -> Unit)? = null
+
+    private val focusPenDetector = FocusPenGestureDetector()
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        return handleXiaomiStylusKey(event) || super.dispatchKeyEvent(event)
+        if (viewModel.uiState.value.keyDiagnosticsEnabled) {
+            onKeyDiagnostic?.invoke(event)
+        }
+        return handleFocusPenKey(event) ||
+            handleXiaomiStylusKey(event) ||
+            super.dispatchKeyEvent(event)
     }
 
     fun requestStylusKeyFocus() {
         requestFocus()
+    }
+
+    /**
+     * Xiaomi Focus Pen barrel gestures arrive as key codes 194–197 once the
+     * system handshake (see FocusPenSystemLink) is in place. They are consumed
+     * here and mapped through the app's own settings; the system function
+     * numbers and stylus settings are never consulted.
+     */
+    private fun handleFocusPenKey(event: KeyEvent): Boolean {
+        if (viewModel.uiState.value.stylusButtonScheme != StylusButtonScheme.XiaomiFocusPen) {
+            return false
+        }
+        if (!FocusPenGestureDetector.isGestureKeyCode(event.keyCode)) return false
+        val gesture = focusPenDetector.onKey(event.keyCode, event.action, event.repeatCount)
+        if (gesture != null) {
+            viewModel.performFocusPenGesture(gesture)
+            invalidate()
+        }
+        return true
     }
 
     private fun handleXiaomiStylusKey(event: KeyEvent): Boolean {
@@ -282,8 +317,14 @@ class NativeDrawCanvasView(
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
+        focusPenDetector.reset()
         viewportScope?.cancel()
         removeCallbacks(null)
+    }
+
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        if (!gainFocus) focusPenDetector.reset()
     }
 
 }

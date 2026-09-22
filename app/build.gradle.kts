@@ -21,13 +21,22 @@ android {
         applicationId = "com.shezik.drawanywhere"
         minSdk = 33
         targetSdk = 36
-        versionCode = 5
-        versionName = "2.3-hpos-stylus"
+        versionCode = 6
+        versionName = "2.4-hpos-focuspen"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
+        // A committed, stable debug key so APKs from successive GitHub Actions runs can be
+        // installed over each other. A fresh CI runner would otherwise mint a new random
+        // debug key on every build, forcing an uninstall (and settings loss) each time.
+        getByName("debug") {
+            storeFile = file("ci-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         create("release") {
             val storeFilePath = localProperties.getProperty("store.file")
             val storePasswordValue = localProperties.getProperty("store.password")
@@ -122,6 +131,12 @@ dependencies {
     implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.2")
     implementation("top.yukonga.miuix.kmp:miuix-preference-android:0.9.2")
     implementation("androidx.navigationevent:navigationevent-compose:1.1.1")
+
+    // Xiaomi PenEngine SDK (HyperOS stylus). Used only for the touch-film handshake with
+    // com.xiaomi.touchservice so Focus Pen barrel gestures reach this app as KeyEvents
+    // 194–197 instead of opening the system shortcut wheel. Gesture-to-action mapping is
+    // done in-app; the SDK's settings-driven callback path is not used.
+    implementation(files("libs/PenEngine-release_0.3.2.aar"))
 }
 
 // Disable baseline.prof for reproducibility

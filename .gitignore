@@ -33,3 +33,6 @@ google-services.json
 *.hprof
 /app/release
 /app/debug
+
+# CI debug signing key (see app/build.gradle.kts signingConfigs.debug)
+!/app/ci-debug.keystore

@@ -1,0 +1,222 @@
+/*
+DrawAnywhere: An Android application that lets you draw on top of other apps.
+Copyright (C) 2025-2026 shezik
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License as published by the Free Software
+Foundation, either version 3 of the License, or any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+package com.shezik.drawanywhere.stylus
+
+import android.content.Context
+import android.content.pm.PackageManager
+import android.util.Log
+import com.miui.penengine.touchfilm.MiuiTouchFilmUtils
+import com.shezik.drawanywhere.model.FocusPenLinkState
+import com.shezik.drawanywhere.model.FocusPenLinkState.Phase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import java.io.File
+import com.miui.penengine.a.b as PenEngineFacade
+
+/**
+ * Claims the Focus Pen barrel-gesture stream from HyperOS.
+ *
+ * Reading KeyEvents 194–197 is not enough on its own: the system only injects
+ * those keys into the focused window after an app has registered with the
+ * pencil-engine service (`com.xiaomi.touchservice`) and enabled "touch film"
+ * mode. Otherwise the system keeps the gesture and shows its own shortcut
+ * wheel. [MiuiTouchFilmUtils.init] performs exactly that handshake:
+ *
+ *  1. `bindService` to `com.xiaomi.touchservice/.pencilengine.PencilEngineManagerService`
+ *  2. `IPencilEngine.registerListener(callback[, packageName])`
+ *  3. `IPencilEngine.setEnable(2 /* touch film */, 1)`
+ *
+ * and [MiuiTouchFilmUtils.onDestroy] reverses it. This class only uses the SDK
+ * for that handshake. It deliberately never calls
+ * `MiuiTouchFilmUtils.onDispatchKeyEvent`, because that path reads the system
+ * stylus settings (`stylus_pinch_status`, `stylus_double_click_status`) and
+ * turns gestures into the system's function numbers. Key codes are mapped
+ * in-app instead (see [FocusPenGestureDetector]).
+ *
+ * Everything the SDK does is wrapped in `runCatching`: the SDK statically loads
+ * `/system_ext/framework/xiaomi-pencilengine-pad.jar` and native code, both of
+ * which are absent on non-Xiaomi devices, and a failure there must never take
+ * the overlay service down.
+ */
+class FocusPenSystemLink(
+    context: Context,
+    private val scope: CoroutineScope,
+) {
+    companion object {
+        private const val TAG = "FocusPenLink"
+        const val TOUCH_SERVICE_PACKAGE = "com.xiaomi.touchservice"
+        private const val ENGINE_JAR_PATH = "/system_ext/framework/xiaomi-pencilengine-pad.jar"
+
+        /** Feature id of "touch film" (barrel gestures) in IPencilEngine.setEnable(). */
+        private const val FEATURE_TOUCH_FILM = 2
+        private const val POLL_WHILE_CONNECTING_MS = 400L
+        private const val POLL_WHILE_CONNECTED_MS = 3_000L
+    }
+
+    private val appContext = context.applicationContext
+    private val _state = MutableStateFlow(FocusPenLinkState())
+    val state: StateFlow<FocusPenLinkState> = _state.asStateFlow()
+
+    private var active = false
+    private var pollJob: Job? = null
+    private var enableResultRecorded = false
+
+    /**
+     * The SDK never calls [onTouchFilmTriggered] because we do not forward key
+     * events to it; the listener only has to exist for init().
+     */
+    private val listener = object : MiuiTouchFilmUtils.TouchFilmListener {
+        override fun onTouchFilmTriggered(function: Int) {
+            Log.d(TAG, "onTouchFilmTriggered($function) ignored: gestures are mapped in-app")
+        }
+
+        override fun onBrushPreviewChanged(enabled: Boolean) = Unit
+    }
+
+    val isActive: Boolean get() = active
+
+    fun enable() {
+        if (active) return
+        active = true
+        enableResultRecorded = false
+
+        val serviceInstalled = isTouchServiceInstalled()
+        val jarPresent = runCatching { File(ENGINE_JAR_PATH).exists() }.getOrDefault(false)
+        if (!serviceInstalled) {
+            Log.w(TAG, "$TOUCH_SERVICE_PACKAGE is not installed; Focus Pen gestures stay with the system")
+            _state.value = FocusPenLinkState(
+                phase = Phase.ServiceMissing,
+                touchServiceInstalled = false,
+                engineJarPresent = jarPresent,
+            )
+            return
+        }
+
+        _state.value = FocusPenLinkState(
+            phase = Phase.Binding,
+            touchServiceInstalled = true,
+            engineJarPresent = jarPresent,
+        )
+        val initResult = runCatching { MiuiTouchFilmUtils.init(appContext, listener) }
+        initResult
+            .onSuccess { ok ->
+                Log.i(TAG, "MiuiTouchFilmUtils.init -> $ok (engine jar present: $jarPresent)")
+                _state.value = _state.value.copy(
+                    sdkInitOk = ok,
+                    phase = if (ok) Phase.Binding else Phase.Failed,
+                    detail = if (ok) null else "init() returned false",
+                )
+            }
+            .onFailure { error ->
+                Log.e(TAG, "MiuiTouchFilmUtils.init threw", error)
+                _state.value = _state.value.copy(
+                    sdkInitOk = false,
+                    phase = Phase.Failed,
+                    detail = error.toString(),
+                )
+            }
+        startPolling()
+    }
+
+    fun disable() {
+        if (!active) return
+        active = false
+        pollJob?.cancel()
+        pollJob = null
+        runCatching { MiuiTouchFilmUtils.onDestroy() }
+            .onFailure { Log.w(TAG, "MiuiTouchFilmUtils.onDestroy threw", it) }
+        _state.value = FocusPenLinkState()
+    }
+
+    fun restart() {
+        disable()
+        enable()
+    }
+
+    private fun isTouchServiceInstalled(): Boolean =
+        try {
+            appContext.packageManager.getPackageInfo(TOUCH_SERVICE_PACKAGE, 0)
+            true
+        } catch (_: PackageManager.NameNotFoundException) {
+            false
+        } catch (error: Throwable) {
+            Log.w(TAG, "Package lookup failed", error)
+            false
+        }
+
+    private fun startPolling() {
+        pollJob?.cancel()
+        pollJob = scope.launch {
+            while (active) {
+                refreshConnection()
+                delay(
+                    if (_state.value.phase == Phase.Connected) POLL_WHILE_CONNECTED_MS
+                    else POLL_WHILE_CONNECTING_MS
+                )
+            }
+        }
+    }
+
+    /**
+     * Peeks at the SDK singleton to learn whether the binder to the pen service
+     * is up, and records the touch-film enable result once. The member names
+     * are the obfuscated ones of PenEngine 0.3.2 (the bundled AAR):
+     * `b.c()` singleton, `.d` bound flag, `.h` IPencilEngine proxy.
+     */
+    private fun refreshConnection() {
+        if (!active) return
+        val current = _state.value
+        if (current.sdkInitOk != true) return
+
+        val peek = runCatching {
+            val facade = PenEngineFacade.c()
+            val bound = facade.d
+            val proxy = facade.h
+            bound to proxy
+        }
+        val (bound, proxy) = peek.getOrElse { error ->
+            Log.w(TAG, "Unable to inspect SDK state", error)
+            _state.value = current.copy(detail = "state peek failed: $error")
+            return
+        }
+
+        if (proxy == null) {
+            val phase = if (bound) Phase.Binding else Phase.Disconnected
+            if (current.phase != phase) _state.value = current.copy(phase = phase)
+            return
+        }
+
+        var enableResult = current.enableResult
+        if (!enableResultRecorded) {
+            enableResultRecorded = true
+            enableResult = runCatching { proxy.a(FEATURE_TOUCH_FILM, 1) }
+                .onSuccess { Log.i(TAG, "setEnable(touchFilm, 1) -> $it") }
+                .onFailure { Log.w(TAG, "setEnable(touchFilm, 1) threw", it) }
+                .getOrNull()
+        }
+        _state.value = current.copy(
+            phase = Phase.Connected,
+            enableResult = enableResult,
+            detail = null,
+        )
+    }
+}

@@ -24,3 +24,8 @@
 # https://f-droid.org/en/docs/Reproducible_Builds/
 -keep class kotlinx.coroutines.CoroutineExceptionHandler
 -keep class kotlinx.coroutines.internal.MainDispatcherFactory
+
+# Xiaomi PenEngine SDK (app/libs/PenEngine-release_0.3.2.aar): keeps its Binder stubs,
+# reflection into the system pencil-engine jar and native bindings intact when minifying.
+-keep class com.miui.penengine.** { *; }
+-dontwarn com.miui.penengine.**

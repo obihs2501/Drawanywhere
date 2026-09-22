@@ -27,24 +27,20 @@ import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.content.pm.ServiceInfo
 import android.net.Uri
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.ImageReader
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
-import android.os.Handler
-import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.util.Log
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.Window
 import android.view.WindowInsets
@@ -52,6 +48,7 @@ import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
 import android.widget.FrameLayout
 import android.widget.Toast
+import androidx.annotation.StringRes
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.round
@@ -59,6 +56,9 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import com.shezik.drawanywhere.capture.RootScreenshot
+import com.shezik.drawanywhere.capture.ScreenCaptureSession
+import com.shezik.drawanywhere.stylus.FocusPenSystemLink
 import com.shezik.drawanywhere.view.DismissTargetView
 import com.shezik.drawanywhere.view.ToolbarLifecycleOwner
 import com.shezik.drawanywhere.view.canvas.NativeDrawCanvasView
@@ -66,25 +66,25 @@ import com.shezik.drawanywhere.view.toolbar.DrawToolbar
 import com.shezik.drawanywhere.view.toolbar.FloatingSettingsWindow
 import com.shezik.drawanywhere.model.StylusButtonScheme
 import com.shezik.drawanywhere.ui.theme.DrawAnywhereTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.io.FileOutputStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 class MainService : Service() {
     companion object {
+        private const val TAG = "MainService"
         private const val NOTIFICATION_ID = 100
         private const val CHANNEL_ID = "default_channel"
         const val ACTION_SCREEN_CAPTURE_PERMISSION_RESULT =
@@ -94,6 +94,12 @@ class MainService : Service() {
         const val EXTRA_SCREEN_CAPTURE_RESULT_CODE = "screen_capture_result_code"
         const val EXTRA_SCREEN_CAPTURE_DATA = "screen_capture_data"
         const val EXTRA_SAVE_LOCATION_URI = "save_location_uri"
+
+        /** Time for WindowManager to apply the hidden overlays before a frame is taken. */
+        private const val OVERLAY_HIDE_SETTLE_MS = 160L
+        private const val CAPTURE_TIMEOUT_MS = 6_000L
+        private const val PAPER_BACKGROUND_COLOR = 0xFFF7F0E5.toInt()
+
         var isRunning: Boolean = false
             private set
     }
@@ -108,6 +114,7 @@ class MainService : Service() {
     private lateinit var drawController: DrawController
     private lateinit var windowManager: WindowManager
     private lateinit var canvasView: NativeDrawCanvasView
+    private lateinit var canvasParams: LayoutParams
     private lateinit var toolbarView: ComposeView
     private lateinit var toolbarDialog: Dialog
     private var settingsView: ComposeView? = null
@@ -115,8 +122,14 @@ class MainService : Service() {
     private lateinit var dismissTargetView: DismissTargetView
     private lateinit var preferencesManager: PreferencesManager
     private lateinit var viewModel: DrawViewModel
+    private lateinit var focusPenLink: FocusPenSystemLink
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var pendingExportMode: ExportMode? = null
+    private var exportJob: Job? = null
+
+    /** Kept alive across saves so the consent dialog appears once per service run. */
+    private var captureSession: ScreenCaptureSession? = null
+    private var foregroundHasProjectionType = false
 
     override fun onCreate() {
         super.onCreate()
@@ -136,6 +149,12 @@ class MainService : Service() {
         )
         DrawSessionBridge.viewModel = viewModel
 
+        focusPenLink = FocusPenSystemLink(this, serviceScope)
+        viewModel.onRetryFocusPenLink = { focusPenLink.restart() }
+        serviceScope.launch {
+            focusPenLink.state.collect { linkState -> viewModel.updateFocusPenLinkState(linkState) }
+        }
+
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
         ServiceCompat.startForeground(
@@ -145,9 +164,10 @@ class MainService : Service() {
 
         // -------- Setup native canvas --------
         canvasView = NativeDrawCanvasView(this, drawController, viewModel)
+        canvasView.onKeyDiagnostic = ::reportKeyEvent
         drawController.onStrokesChanged = { canvasView.invalidate() }
 
-        val canvasParams = LayoutParams(
+        canvasParams = LayoutParams(
             LayoutParams.MATCH_PARENT,
             LayoutParams.MATCH_PARENT,
             LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -236,6 +256,10 @@ class MainService : Service() {
                 updateToolbarWindowLayout(toolbarParams)
                 updateToolbarAlpha()
                 syncCanvasKeyFocus(state)
+                syncFocusPenLink(state)
+                if (!state.keepScreenCaptureSession && exportJob?.isActive != true) {
+                    releaseCaptureSession()
+                }
             }
         }
 
@@ -289,6 +313,32 @@ class MainService : Service() {
             canvasView.requestStylusKeyFocus()
         } else {
             canvasView.clearFocus()
+        }
+    }
+
+    /**
+     * Claim the Focus Pen gesture stream only while this app's canvas is the
+     * window that should receive it; hand it back to the system otherwise so
+     * the shortcut wheel keeps working in other apps.
+     */
+    private fun syncFocusPenLink(state: UiState) {
+        val wanted = state.stylusButtonScheme == StylusButtonScheme.XiaomiFocusPen &&
+            state.canvasVisible &&
+            !state.canvasPassthrough
+        if (wanted) focusPenLink.enable() else focusPenLink.disable()
+    }
+
+    private fun reportKeyEvent(event: KeyEvent) {
+        val actionName = when (event.action) {
+            KeyEvent.ACTION_DOWN -> "DOWN"
+            KeyEvent.ACTION_UP -> "UP"
+            else -> "action=${event.action}"
+        }
+        val keyName = KeyEvent.keyCodeToString(event.keyCode)
+        val device = event.device?.name ?: "unknown device"
+        Log.i(TAG, "KeyEvent ${event.keyCode} ($keyName) $actionName from $device")
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            showToast(R.string.key_diagnostics_toast, event.keyCode, keyName, actionName, device)
         }
     }
 
@@ -454,33 +504,78 @@ class MainService : Service() {
         val uri = intent.getStringExtra(EXTRA_SAVE_LOCATION_URI)
         if (uri.isNullOrBlank()) return
         viewModel.setExportTreeUri(uri)
-        Toast.makeText(
-            this,
-            getString(R.string.save_location_updated),
-            Toast.LENGTH_SHORT
-        ).show()
+        showToast(R.string.save_location_updated)
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Screen capture session (MediaProjection)
+    // ═══════════════════════════════════════════════════════════════
 
     private fun handleScreenCapturePermissionResult(intent: Intent) {
         val mode = pendingExportMode
         pendingExportMode = null
-        if (mode != ExportMode.Screen) return
 
         val resultCode = intent.getIntExtra(EXTRA_SCREEN_CAPTURE_RESULT_CODE, Activity.RESULT_CANCELED)
         val resultData = intent.getParcelableExtraCompat<Intent>(EXTRA_SCREEN_CAPTURE_DATA)
         if (resultCode != Activity.RESULT_OK || resultData == null) {
-            Toast.makeText(
-                this,
-                getString(R.string.screen_capture_permission_denied),
-                Toast.LENGTH_LONG
-            ).show()
+            showToast(R.string.screen_capture_permission_denied)
             return
         }
-
-        saveCurrentDrawing(mode, resultCode, resultData)
+        if (!startCaptureSession(resultCode, resultData)) {
+            showToast(R.string.export_failed)
+            return
+        }
+        if (mode == ExportMode.Screen) saveCurrentDrawing(mode)
     }
 
+    /**
+     * Exchanges a fresh consent for a long-lived session. The foreground
+     * service must carry the mediaProjection type before getMediaProjection()
+     * and for as long as the session lives (Android 14+ stops it otherwise).
+     */
+    private fun startCaptureSession(resultCode: Int, resultData: Intent): Boolean {
+        releaseCaptureSession()
+        elevateForegroundForScreenCapture()
+        val (displayWidth, displayHeight) = getDisplaySize()
+        val session = ScreenCaptureSession.start(
+            context = this,
+            resultCode = resultCode,
+            resultData = resultData,
+            width = displayWidth,
+            height = displayHeight,
+            dpi = resources.displayMetrics.densityDpi,
+            onStopped = ::onCaptureSessionStopped,
+        )
+        if (session == null) {
+            restoreRegularForegroundType()
+            return false
+        }
+        captureSession = session
+        Log.i(TAG, "Screen capture session started (${displayWidth}x${displayHeight})")
+        return true
+    }
+
+    private fun onCaptureSessionStopped() {
+        // Invoked on the main thread when the user/system ends the projection
+        // (status-bar chip, screen lock policy, ...). Next save re-prompts.
+        if (captureSession != null) {
+            captureSession = null
+            restoreRegularForegroundType()
+        }
+    }
+
+    private fun releaseCaptureSession(restoreForegroundType: Boolean = true) {
+        val session = captureSession ?: return
+        captureSession = null
+        session.release()
+        if (restoreForegroundType) restoreRegularForegroundType()
+    }
+
+    private fun hasLiveCaptureSession(): Boolean =
+        captureSession?.isStopped == false
+
     private fun elevateForegroundForScreenCapture() {
+        if (foregroundHasProjectionType) return
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
@@ -488,9 +583,12 @@ class MainService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         )
+        foregroundHasProjectionType = true
     }
 
     private fun restoreRegularForegroundType() {
+        if (!foregroundHasProjectionType) return
+        foregroundHasProjectionType = false
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
@@ -499,188 +597,182 @@ class MainService : Service() {
         )
     }
 
-    private fun saveCurrentDrawing(
-        mode: ExportMode,
-        screenCaptureResultCode: Int? = null,
-        screenCaptureData: Intent? = null,
-    ) {
-        if (mode == ExportMode.Screen && (screenCaptureResultCode == null || screenCaptureData == null)) {
+    // ═══════════════════════════════════════════════════════════════
+    //  Export
+    // ═══════════════════════════════════════════════════════════════
+
+    private fun saveCurrentDrawing(mode: ExportMode) {
+        if (exportJob?.isActive == true) return
+        if (mode == ExportMode.Screen &&
+            !hasLiveCaptureSession() &&
+            !viewModel.uiState.value.rootScreenshotEnabled
+        ) {
             pendingExportMode = mode
             requestScreenCapturePermission()
             return
         }
-
-        serviceScope.launch {
-            val result = runCatching {
-                val bitmap = when (mode) {
-                    ExportMode.Transparent -> canvasView.renderToBitmap(backgroundColor = null)
-                    ExportMode.Paper -> canvasView.renderToBitmap(backgroundColor = 0xFFF7F0E5.toInt())
-                    ExportMode.Screen -> renderScreenBackdropExport(
-                        screenCaptureResultCode = requireNotNull(screenCaptureResultCode),
-                        screenCaptureData = requireNotNull(screenCaptureData),
-                    )
-                }
-                withContext(Dispatchers.IO) {
-                    saveBitmap(bitmap, mode).getOrThrow()
-                }
-            }
-            result
-                .onSuccess { displayName ->
-                    Toast.makeText(
-                        this@MainService,
-                        getString(R.string.export_success, displayName),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-                .onFailure {
-                    Toast.makeText(
-                        this@MainService,
-                        getString(R.string.export_failed),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-        }
+        exportJob = serviceScope.launch { runExport(mode) }
     }
 
-    private suspend fun renderScreenBackdropExport(
-        screenCaptureResultCode: Int,
-        screenCaptureData: Intent,
-    ): Bitmap {
-        val drawingBitmap = canvasView.renderToBitmap(backgroundColor = null)
-        val backgroundBitmap = try {
-            captureBackgroundBitmap(screenCaptureResultCode, screenCaptureData)
-        } catch (error: Throwable) {
-            drawingBitmap.recycle()
-            throw error
-        }
-
-        return try {
-            val mergedBitmap = Bitmap.createBitmap(
-                backgroundBitmap.width,
-                backgroundBitmap.height,
-                Bitmap.Config.ARGB_8888
-            )
-            val canvas = Canvas(mergedBitmap)
-            canvas.drawBitmap(backgroundBitmap, 0f, 0f, null)
-            canvas.drawBitmap(drawingBitmap, 0f, 0f, null)
-            mergedBitmap
-        } finally {
-            backgroundBitmap.recycle()
-            drawingBitmap.recycle()
-        }
-    }
-
-    private suspend fun captureBackgroundBitmap(
-        screenCaptureResultCode: Int,
-        screenCaptureData: Intent,
-    ): Bitmap {
-        val canvasWasVisible = canvasView.visibility == View.VISIBLE
-        val toolbarWasVisible = toolbarView.visibility == View.VISIBLE
-        val dismissWasVisible = dismissTargetView.visibility == View.VISIBLE
-
-        toolbarView.visibility = View.INVISIBLE
-        canvasView.visibility = View.INVISIBLE
-        dismissTargetView.visibility = View.INVISIBLE
-
-        return try {
-            delay(120)
-            withTimeout(5_000) {
-                captureScreenBitmap(screenCaptureResultCode, screenCaptureData)
-            }
-        } finally {
-            toolbarView.visibility = if (toolbarWasVisible) View.VISIBLE else View.INVISIBLE
-            canvasView.visibility = if (canvasWasVisible) View.VISIBLE else View.INVISIBLE
-            dismissTargetView.visibility = if (dismissWasVisible) View.VISIBLE else View.GONE
-        }
-    }
-
-    private suspend fun captureScreenBitmap(
-        screenCaptureResultCode: Int,
-        screenCaptureData: Intent,
-    ): Bitmap = suspendCancellableCoroutine { continuation ->
-        elevateForegroundForScreenCapture()
-        val width = canvasView.width.coerceAtLeast(1)
-        val height = canvasView.height.coerceAtLeast(1)
-        val densityDpi = resources.displayMetrics.densityDpi
-        val imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        val mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
-        val mediaProjection = mediaProjectionManager.getMediaProjection(screenCaptureResultCode, screenCaptureData)
-            ?: run {
-                imageReader.close()
-                continuation.resumeWithException(IllegalStateException("MediaProjection was unavailable"))
-                return@suspendCancellableCoroutine
-            }
-        val handler = Handler(Looper.getMainLooper())
-        var virtualDisplay: VirtualDisplay? = null
-        var cleanedUp = false
-        lateinit var projectionCallback: MediaProjection.Callback
-
-        fun cleanUp(stopProjection: Boolean = true) {
-            if (cleanedUp) return
-            cleanedUp = true
-            imageReader.setOnImageAvailableListener(null, null)
-            runCatching { virtualDisplay?.release() }
-            runCatching { mediaProjection.unregisterCallback(projectionCallback) }
-            if (stopProjection) runCatching { mediaProjection.stop() }
-            runCatching { imageReader.close() }
-            restoreRegularForegroundType()
-        }
-        projectionCallback = object : MediaProjection.Callback() {
-            override fun onStop() {
-                if (continuation.isActive) {
-                    continuation.resumeWithException(IllegalStateException("MediaProjection stopped"))
-                }
-                cleanUp(stopProjection = false)
-            }
-        }
-        mediaProjection.registerCallback(projectionCallback, handler)
-
-        imageReader.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-            try {
-                val plane = image.planes.first()
-                val buffer = plane.buffer
-                val pixelStride = plane.pixelStride
-                val rowStride = plane.rowStride
-                val rowPadding = rowStride - pixelStride * width
-                val rawBitmap = Bitmap.createBitmap(
-                    width + rowPadding / pixelStride,
-                    height,
-                    Bitmap.Config.ARGB_8888
-                )
-                rawBitmap.copyPixelsFromBuffer(buffer)
-                val croppedBitmap = Bitmap.createBitmap(rawBitmap, 0, 0, width, height)
-                rawBitmap.recycle()
-                if (continuation.isActive) {
-                    continuation.resume(croppedBitmap)
-                } else {
-                    croppedBitmap.recycle()
-                }
+    private suspend fun runExport(mode: ExportMode) {
+        var background: Bitmap? = null
+        if (mode == ExportMode.Screen) {
+            background = try {
+                captureBackground()
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
-                if (continuation.isActive) continuation.resumeWithException(error)
-            } finally {
-                image.close()
-                cleanUp()
+                Log.e(TAG, "Screen capture failed", error)
+                showToast(R.string.export_failed)
+                return
             }
-        }, handler)
-
-        try {
-            virtualDisplay = mediaProjection.createVirtualDisplay(
-                "DrawAnywhereScreenCapture",
-                width,
-                height,
-                densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader.surface,
-                null,
-                handler,
-            )
-        } catch (error: Throwable) {
-            cleanUp()
-            if (continuation.isActive) continuation.resumeWithException(error)
+            if (background == null) {
+                // No usable session (root failed / projection stopped): ask once, then retry.
+                pendingExportMode = mode
+                requestScreenCapturePermission()
+                return
+            }
         }
 
-        continuation.invokeOnCancellation { cleanUp() }
+        val result = runCatching {
+            val bitmap = when (mode) {
+                ExportMode.Transparent -> canvasView.renderToBitmap(backgroundColor = null)
+                ExportMode.Paper -> canvasView.renderToBitmap(backgroundColor = PAPER_BACKGROUND_COLOR)
+                ExportMode.Screen -> composeScreenExport(requireNotNull(background))
+            }
+            withContext(Dispatchers.IO) {
+                saveBitmap(bitmap, mode).getOrThrow()
+            }
+        }
+        result
+            .onSuccess { displayName -> showToast(R.string.export_success, displayName) }
+            .onFailure { error ->
+                if (error is CancellationException) throw error
+                Log.e(TAG, "Export failed", error)
+                showToast(R.string.export_failed)
+            }
+
+        if (mode == ExportMode.Screen && !viewModel.uiState.value.keepScreenCaptureSession) {
+            releaseCaptureSession()
+        }
+    }
+
+    /**
+     * Grabs what is behind the canvas with every DrawAnywhere window hidden.
+     *
+     * @return the background cropped to the canvas, or null when a consent
+     *   dialog is required before anything can be captured.
+     */
+    private suspend fun captureBackground(): Bitmap? = withOverlaysHidden {
+        val state = viewModel.uiState.value
+        if (state.rootScreenshotEnabled) {
+            val rootShot = RootScreenshot.capture()
+            if (rootShot != null) return@withOverlaysHidden cropToCanvas(rootShot)
+            showToast(R.string.root_screenshot_failed)
+        }
+        val session = captureSession?.takeIf { !it.isStopped } ?: return@withOverlaysHidden null
+        val (displayWidth, displayHeight) = getDisplaySize()
+        val fullScreen = withTimeout(CAPTURE_TIMEOUT_MS) {
+            session.captureFrame(
+                width = displayWidth,
+                height = displayHeight,
+                dpi = resources.displayMetrics.densityDpi,
+                nudge = ::nudgeComposition,
+            )
+        }
+        cropToCanvas(fullScreen)
+    }
+
+    /**
+     * Hides every window this service owns. The toolbar and settings are
+     * Dialogs whose window background (translucent color + blur) is drawn by
+     * the window itself, so making the content view INVISIBLE is not enough:
+     * the whole Dialog has to be hidden or its frame ends up in the capture.
+     */
+    private suspend fun <T> withOverlaysHidden(block: suspend () -> T): T {
+        val toolbarShowing = ::toolbarDialog.isInitialized && toolbarDialog.isShowing
+        val settingsShowing = settingsDialog?.isShowing == true
+        val canvasVisibility = canvasView.visibility
+        val dismissVisibility = dismissTargetView.visibility
+
+        if (toolbarShowing) toolbarDialog.hide()
+        if (settingsShowing) settingsDialog?.hide()
+        canvasView.visibility = View.INVISIBLE
+        dismissTargetView.visibility = View.GONE
+        try {
+            delay(OVERLAY_HIDE_SETTLE_MS)
+            return block()
+        } finally {
+            canvasView.visibility = canvasVisibility
+            dismissTargetView.visibility = dismissVisibility
+            if (canvasParams.alpha != 1f) {
+                canvasParams.alpha = 1f
+                runCatching { windowManager.updateViewLayout(canvasView, canvasParams) }
+            }
+            if (toolbarShowing && ::toolbarDialog.isInitialized) runCatching { toolbarDialog.show() }
+            if (settingsShowing) runCatching { settingsDialog?.show() }
+        }
+    }
+
+    /**
+     * Forces the compositor to produce a frame if attaching the capture
+     * surface alone did not. The canvas view is INVISIBLE at this point, so a
+     * window-alpha change is invisible on screen but still a WindowManager
+     * transaction.
+     */
+    private fun nudgeComposition() {
+        if (!canvasView.isAttachedToWindow) return
+        canvasParams.alpha = if (canvasParams.alpha < 1f) 1f else 0.99f
+        runCatching { windowManager.updateViewLayout(canvasView, canvasParams) }
+    }
+
+    /** Maps a full-display frame onto the canvas window's screen rectangle, 1:1. */
+    private fun cropToCanvas(frame: Bitmap): Bitmap {
+        val (displayWidth, displayHeight) = getDisplaySize()
+        val normalized = if (frame.width != displayWidth || frame.height != displayHeight) {
+            Log.w(TAG, "Capture is ${frame.width}x${frame.height}, display is ${displayWidth}x${displayHeight}; scaling")
+            Bitmap.createScaledBitmap(frame, displayWidth, displayHeight, true).also {
+                if (it !== frame) frame.recycle()
+            }
+        } else frame
+
+        val targetWidth = canvasView.width.coerceAtLeast(1)
+        val targetHeight = canvasView.height.coerceAtLeast(1)
+        val location = IntArray(2).also(canvasView::getLocationOnScreen)
+        val left = location[0].coerceIn(0, (normalized.width - 1).coerceAtLeast(0))
+        val top = location[1].coerceIn(0, (normalized.height - 1).coerceAtLeast(0))
+        val cropWidth = minOf(targetWidth, normalized.width - left)
+        val cropHeight = minOf(targetHeight, normalized.height - top)
+
+        if (left == 0 && top == 0 && cropWidth == targetWidth && cropHeight == targetHeight &&
+            normalized.width == targetWidth && normalized.height == targetHeight
+        ) return normalized
+
+        val result = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+        if (cropWidth > 0 && cropHeight > 0) {
+            Canvas(result).drawBitmap(
+                normalized,
+                Rect(left, top, left + cropWidth, top + cropHeight),
+                Rect(0, 0, cropWidth, cropHeight),
+                null
+            )
+        }
+        normalized.recycle()
+        return result
+    }
+
+    private fun composeScreenExport(background: Bitmap): Bitmap {
+        val drawing = canvasView.renderToBitmap(backgroundColor = null)
+        return try {
+            Bitmap.createBitmap(background.width, background.height, Bitmap.Config.ARGB_8888).also { merged ->
+                val canvas = Canvas(merged)
+                canvas.drawBitmap(background, 0f, 0f, null)
+                canvas.drawBitmap(drawing, 0f, 0f, null)
+            }
+        } finally {
+            background.recycle()
+            drawing.recycle()
+        }
     }
 
     private fun saveBitmap(bitmap: Bitmap, mode: ExportMode): Result<String> = runCatching {
@@ -755,8 +847,18 @@ class MainService : Service() {
             recycle()
         }
 
+    private fun showToast(@StringRes message: Int, vararg formatArgs: Any) {
+        Toast.makeText(this, getString(message, *formatArgs), Toast.LENGTH_LONG).show()
+    }
+
     private fun dpToPx(dp: Float): Int =
         (dp * resources.displayMetrics.density).toInt()
+
+    /** Full display bounds in the current rotation, system bars included. */
+    private fun getDisplaySize(): Pair<Int, Int> {
+        val bounds = windowManager.maximumWindowMetrics.bounds
+        return bounds.width().coerceAtLeast(1) to bounds.height().coerceAtLeast(1)
+    }
 
     @Suppress("DEPRECATION")
     private fun getUsableScreenSize(wm: WindowManager): Pair<Int, Int> =
@@ -774,6 +876,9 @@ class MainService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        if (::focusPenLink.isInitialized) focusPenLink.disable()
+        // The service is going away; do not call startForeground() again from here.
+        releaseCaptureSession(restoreForegroundType = false)
         if (DrawSessionBridge.viewModel === viewModel) {
             DrawSessionBridge.viewModel = null
         }

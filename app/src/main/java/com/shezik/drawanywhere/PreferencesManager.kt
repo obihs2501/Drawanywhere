@@ -19,6 +19,7 @@ package com.shezik.drawanywhere
 import android.content.Context
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import com.shezik.drawanywhere.model.FocusPenGesture
 import com.shezik.drawanywhere.model.PenConfig
 import com.shezik.drawanywhere.model.PenType
 import com.shezik.drawanywhere.model.StylusButtonAction
@@ -54,6 +55,9 @@ class PreferencesManager(private val context: Context) {
         val STYLUS_BUTTON_SCHEME = stringPreferencesKey("stylus_button_scheme")
         val STYLUS_PRIMARY_BUTTON_ACTION = stringPreferencesKey("stylus_primary_button_action")
         val STYLUS_SECONDARY_BUTTON_ACTION = stringPreferencesKey("stylus_secondary_button_action")
+        val KEY_DIAGNOSTICS_ENABLED = booleanPreferencesKey("key_diagnostics_enabled")
+        val KEEP_SCREEN_CAPTURE_SESSION = booleanPreferencesKey("keep_screen_capture_session")
+        val ROOT_SCREENSHOT_ENABLED = booleanPreferencesKey("root_screenshot_enabled")
         val PRESSURE_ERASER_ENABLED = booleanPreferencesKey("pressure_eraser_enabled")
         val PRESSURE_ERASER_THRESHOLD = floatPreferencesKey("pressure_eraser_threshold")
         val RECENT_COLORS = stringPreferencesKey("recent_colors")
@@ -70,6 +74,9 @@ class PreferencesManager(private val context: Context) {
         fun penColorKey(penType: PenType) = intPreferencesKey("${penType.name}_color")
         fun penWidthKey(penType: PenType) = floatPreferencesKey("${penType.name}_width")
         fun penAlphaKey(penType: PenType) = floatPreferencesKey("${penType.name}_alpha")
+
+        fun focusPenActionKey(gesture: FocusPenGesture) =
+            stringPreferencesKey("focus_pen_${gesture.name.lowercase()}_action")
     }
 
     private inline fun <reified T : Enum<T>> getEnumValueOrDefault(
@@ -134,6 +141,18 @@ class PreferencesManager(private val context: Context) {
             preferences[PreferencesKeys.STYLUS_SECONDARY_BUTTON_ACTION],
             defaultUiState.stylusSecondaryButtonAction
         )
+        fun focusPenAction(gesture: FocusPenGesture, default: StylusButtonAction) =
+            getEnumValueOrDefault(preferences[PreferencesKeys.focusPenActionKey(gesture)], default)
+        val focusPenSqueezeAction = focusPenAction(FocusPenGesture.Squeeze, defaultUiState.focusPenSqueezeAction)
+        val focusPenDoubleTapAction = focusPenAction(FocusPenGesture.DoubleTap, defaultUiState.focusPenDoubleTapAction)
+        val focusPenSlideUpAction = focusPenAction(FocusPenGesture.SlideUp, defaultUiState.focusPenSlideUpAction)
+        val focusPenSlideDownAction = focusPenAction(FocusPenGesture.SlideDown, defaultUiState.focusPenSlideDownAction)
+        val keyDiagnosticsEnabled = preferences[PreferencesKeys.KEY_DIAGNOSTICS_ENABLED]
+            ?: defaultUiState.keyDiagnosticsEnabled
+        val keepScreenCaptureSession = preferences[PreferencesKeys.KEEP_SCREEN_CAPTURE_SESSION]
+            ?: defaultUiState.keepScreenCaptureSession
+        val rootScreenshotEnabled = preferences[PreferencesKeys.ROOT_SCREENSHOT_ENABLED]
+            ?: defaultUiState.rootScreenshotEnabled
         val pressureEraserEnabled = preferences[PreferencesKeys.PRESSURE_ERASER_ENABLED]
             ?: defaultUiState.pressureEraserEnabled
         val pressureEraserThreshold = preferences[PreferencesKeys.PRESSURE_ERASER_THRESHOLD]
@@ -173,6 +192,13 @@ class PreferencesManager(private val context: Context) {
             stylusButtonScheme = stylusButtonScheme,
             stylusPrimaryButtonAction = stylusPrimaryButtonAction,
             stylusSecondaryButtonAction = stylusSecondaryButtonAction,
+            focusPenSqueezeAction = focusPenSqueezeAction,
+            focusPenDoubleTapAction = focusPenDoubleTapAction,
+            focusPenSlideUpAction = focusPenSlideUpAction,
+            focusPenSlideDownAction = focusPenSlideDownAction,
+            keyDiagnosticsEnabled = keyDiagnosticsEnabled,
+            keepScreenCaptureSession = keepScreenCaptureSession,
+            rootScreenshotEnabled = rootScreenshotEnabled,
             pressureEraserEnabled = pressureEraserEnabled,
             pressureEraserThreshold = pressureEraserThreshold,
             recentColors = recentColors,
@@ -201,6 +227,13 @@ class PreferencesManager(private val context: Context) {
             preferences[PreferencesKeys.STYLUS_BUTTON_SCHEME] = uiState.stylusButtonScheme.name
             preferences[PreferencesKeys.STYLUS_PRIMARY_BUTTON_ACTION] = uiState.stylusPrimaryButtonAction.name
             preferences[PreferencesKeys.STYLUS_SECONDARY_BUTTON_ACTION] = uiState.stylusSecondaryButtonAction.name
+            preferences[PreferencesKeys.focusPenActionKey(FocusPenGesture.Squeeze)] = uiState.focusPenSqueezeAction.name
+            preferences[PreferencesKeys.focusPenActionKey(FocusPenGesture.DoubleTap)] = uiState.focusPenDoubleTapAction.name
+            preferences[PreferencesKeys.focusPenActionKey(FocusPenGesture.SlideUp)] = uiState.focusPenSlideUpAction.name
+            preferences[PreferencesKeys.focusPenActionKey(FocusPenGesture.SlideDown)] = uiState.focusPenSlideDownAction.name
+            preferences[PreferencesKeys.KEY_DIAGNOSTICS_ENABLED] = uiState.keyDiagnosticsEnabled
+            preferences[PreferencesKeys.KEEP_SCREEN_CAPTURE_SESSION] = uiState.keepScreenCaptureSession
+            preferences[PreferencesKeys.ROOT_SCREENSHOT_ENABLED] = uiState.rootScreenshotEnabled
             preferences[PreferencesKeys.PRESSURE_ERASER_ENABLED] = uiState.pressureEraserEnabled
             preferences[PreferencesKeys.PRESSURE_ERASER_THRESHOLD] = uiState.pressureEraserThreshold
             preferences[PreferencesKeys.RECENT_COLORS] = uiState.recentColors.joinToString(",") { it.toArgb().toString(16).padStart(8, '0') }
