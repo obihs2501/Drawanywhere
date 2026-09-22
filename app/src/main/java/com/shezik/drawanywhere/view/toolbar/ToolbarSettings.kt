@@ -321,6 +321,7 @@ private fun stylusButtonActionLabel(action: StylusButtonAction): String =
     when (action) {
         StylusButtonAction.None -> stringResource(R.string.stylus_action_none)
         StylusButtonAction.CyclePresetColor -> stringResource(R.string.stylus_action_cycle_color)
+        StylusButtonAction.CycleToolbarColor -> stringResource(R.string.stylus_action_cycle_toolbar_color)
         StylusButtonAction.ToggleStrokeEraser -> stringResource(R.string.stylus_action_stroke_eraser)
         StylusButtonAction.TogglePixelEraser -> stringResource(R.string.stylus_action_pixel_eraser)
         StylusButtonAction.Undo -> stringResource(R.string.undo)
@@ -328,7 +329,6 @@ private fun stylusButtonActionLabel(action: StylusButtonAction): String =
         StylusButtonAction.ToggleCanvasVisibility -> stringResource(R.string.stylus_action_toggle_canvas)
         StylusButtonAction.ToggleCanvasPassthrough -> stringResource(R.string.stylus_action_toggle_passthrough)
         StylusButtonAction.ToggleLaser -> stringResource(R.string.laser)
-        StylusButtonAction.SwitchPreviousPen -> stringResource(R.string.stylus_action_previous_pen)
         StylusButtonAction.ClearCanvas -> stringResource(R.string.clear_canvas)
         StylusButtonAction.IncreaseStrokeWidth -> stringResource(R.string.stylus_action_increase_width)
         StylusButtonAction.DecreaseStrokeWidth -> stringResource(R.string.stylus_action_decrease_width)

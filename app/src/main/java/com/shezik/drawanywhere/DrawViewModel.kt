@@ -31,6 +31,7 @@ import com.shezik.drawanywhere.model.StrokeModifier
 import com.shezik.drawanywhere.model.StylusButtonAction
 import com.shezik.drawanywhere.model.StylusButtonScheme
 import com.shezik.drawanywhere.model.StrokeSample
+import com.shezik.drawanywhere.model.TOOLBAR_COLORS
 import com.shezik.drawanywhere.view.canvas.CanvasViewport
 import com.shezik.drawanywhere.view.canvas.LockMode
 import com.shezik.drawanywhere.view.toolbar.ToolbarOrientation
@@ -70,6 +71,11 @@ data class UiState(
     val focusPenDoubleTapAction: StylusButtonAction = StylusButtonAction.ToggleStrokeEraser,
     val focusPenSlideUpAction: StylusButtonAction = StylusButtonAction.IncreaseStrokeWidth,
     val focusPenSlideDownAction: StylusButtonAction = StylusButtonAction.DecreaseStrokeWidth,
+    /**
+     * A double tap is two squeezes; the second must start within this many ms
+     * after the first is released. A lone squeeze fires once the window passes.
+     */
+    val focusPenDoubleTapWindowMs: Int = 400,
     /** Show a toast for every key event the canvas receives (troubleshooting). */
     val keyDiagnosticsEnabled: Boolean = false,
     /** Keep the MediaProjection session alive so screen saves ask for consent once per run. */
@@ -212,27 +218,14 @@ class DrawViewModel(
         dimmingJob?.cancel()
     }
 
-    fun switchToPen(type: PenType) = switchToPen(type, recordHistory = true)
-
-    /**
-     * @param recordHistory false for transient switches (barrel-button erasing)
-     *   that must not become the target of [switchToPreviousPen].
-     */
-    private fun switchToPen(type: PenType, recordHistory: Boolean) {
+    fun switchToPen(type: PenType) {
         if (type.isEraser) lastEraserPenType = type
-        val current = uiState.value.currentPenType
-        if (recordHistory && current != type) previousUserPenType = current
         _uiState.update { it.copy(currentPenType = type) }
         controller.setPenConfig(uiState.value.currentPenConfig)
     }
 
     fun switchToLastEraser() {
         switchToPen(lastEraserPenType.takeIf { it.isEraser } ?: PenType.StrokeEraser)
-    }
-
-    fun switchToPreviousPen() {
-        val target = previousUserPenType ?: PenType.Pen
-        if (target != uiState.value.currentPenType) switchToPen(target)
     }
 
     fun stepStrokeWidth(factor: Float) {
@@ -249,8 +242,6 @@ class DrawViewModel(
         }
 
     private var previousPenType: PenType? = null
-    /** Last pen the user deliberately left; target of [switchToPreviousPen]. */
-    private var previousUserPenType: PenType? = null
     private var isStrokeDown: Boolean = false
     private var stylusEraserReturnPenType: PenType = PenType.Pen
     private var stylusLaserReturnPenType: PenType = PenType.Pen
@@ -266,7 +257,7 @@ class DrawViewModel(
         val newPenType = resolvePenType(modifier)
         if (newPenType != uiState.value.currentPenType) {
             previousPenType = uiState.value.currentPenType
-            switchToPen(newPenType, recordHistory = false)
+            switchToPen(newPenType)
         }
 
         controller.createStroke(sample)
@@ -288,7 +279,7 @@ class DrawViewModel(
         controller.finishStroke()
 
         previousPenType?.let {
-            switchToPen(it, recordHistory = false)
+            switchToPen(it)
             previousPenType = null
         }
         isStrokeDown = false
@@ -327,17 +318,21 @@ class DrawViewModel(
 
     fun setPresetColor(color: Color) = setPenColor(color, trackRecent = false)
 
-    fun cyclePresetColor() {
+    fun cyclePresetColor() = cycleThroughColors(uiState.value.stylusCycleColors.ifEmpty { PRESET_COLORS })
+
+    /** Steps through the ten swatches shown on the toolbar. */
+    fun cycleToolbarColor() = cycleThroughColors(TOOLBAR_COLORS)
+
+    private fun cycleThroughColors(colors: List<Color>) {
+        if (colors.isEmpty()) return
         val currentType = uiState.value.currentPenType
         if (currentType.isEraser) {
             switchToPen(stylusEraserReturnPenType.takeUnless { it.isEraser } ?: PenType.Pen)
         }
 
         val currentColor = uiState.value.currentPenConfig.color.toArgb()
-        val cycleColors = uiState.value.stylusCycleColors.ifEmpty { PRESET_COLORS }
-        val currentIndex = cycleColors.indexOfFirst { it.toArgb() == currentColor }
-        val nextColor = cycleColors[(currentIndex + 1).floorMod(cycleColors.size)]
-        setPresetColor(nextColor)
+        val currentIndex = colors.indexOfFirst { it.toArgb() == currentColor }
+        setPresetColor(colors[(currentIndex + 1).floorMod(colors.size)])
     }
 
     fun toggleStrokeEraser() {
@@ -362,6 +357,7 @@ class DrawViewModel(
         when (action) {
             StylusButtonAction.None -> {}
             StylusButtonAction.CyclePresetColor -> cyclePresetColor()
+            StylusButtonAction.CycleToolbarColor -> cycleToolbarColor()
             StylusButtonAction.ToggleStrokeEraser -> toggleStrokeEraser()
             StylusButtonAction.TogglePixelEraser -> togglePixelEraser()
             StylusButtonAction.Undo -> undo()
@@ -369,7 +365,6 @@ class DrawViewModel(
             StylusButtonAction.ToggleCanvasVisibility -> toggleCanvasVisibility()
             StylusButtonAction.ToggleCanvasPassthrough -> toggleCanvasPassthrough()
             StylusButtonAction.ToggleLaser -> toggleLaser()
-            StylusButtonAction.SwitchPreviousPen -> switchToPreviousPen()
             StylusButtonAction.ClearCanvas -> clearCanvas()
             StylusButtonAction.IncreaseStrokeWidth -> stepStrokeWidth(STROKE_WIDTH_STEP)
             StylusButtonAction.DecreaseStrokeWidth -> stepStrokeWidth(1f / STROKE_WIDTH_STEP)
@@ -393,6 +388,9 @@ class DrawViewModel(
 
     fun setKeyDiagnosticsEnabled(state: Boolean) =
         _uiState.update { it.copy(keyDiagnosticsEnabled = state) }
+
+    fun setFocusPenDoubleTapWindowMs(windowMs: Int) =
+        _uiState.update { it.copy(focusPenDoubleTapWindowMs = windowMs.coerceIn(150, 1_000)) }
 
     fun setKeepScreenCaptureSession(state: Boolean) =
         _uiState.update { it.copy(keepScreenCaptureSession = state) }

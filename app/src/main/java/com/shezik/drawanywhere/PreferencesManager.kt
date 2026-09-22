@@ -60,6 +60,7 @@ class PreferencesManager(private val context: Context) {
         val KEEP_SCREEN_CAPTURE_SESSION = booleanPreferencesKey("keep_screen_capture_session")
         val ROOT_SCREENSHOT_ENABLED = booleanPreferencesKey("root_screenshot_enabled")
         val FOCUS_PEN_LINK_MODE = stringPreferencesKey("focus_pen_link_mode")
+        val FOCUS_PEN_DOUBLE_TAP_WINDOW_MS = intPreferencesKey("focus_pen_double_tap_window_ms")
         val PRESSURE_ERASER_ENABLED = booleanPreferencesKey("pressure_eraser_enabled")
         val PRESSURE_ERASER_THRESHOLD = floatPreferencesKey("pressure_eraser_threshold")
         val RECENT_COLORS = stringPreferencesKey("recent_colors")
@@ -159,6 +160,8 @@ class PreferencesManager(private val context: Context) {
             preferences[PreferencesKeys.FOCUS_PEN_LINK_MODE],
             defaultUiState.focusPenLinkMode
         )
+        val focusPenDoubleTapWindowMs = preferences[PreferencesKeys.FOCUS_PEN_DOUBLE_TAP_WINDOW_MS]
+            ?: defaultUiState.focusPenDoubleTapWindowMs
         val pressureEraserEnabled = preferences[PreferencesKeys.PRESSURE_ERASER_ENABLED]
             ?: defaultUiState.pressureEraserEnabled
         val pressureEraserThreshold = preferences[PreferencesKeys.PRESSURE_ERASER_THRESHOLD]
@@ -206,6 +209,7 @@ class PreferencesManager(private val context: Context) {
             keepScreenCaptureSession = keepScreenCaptureSession,
             rootScreenshotEnabled = rootScreenshotEnabled,
             focusPenLinkMode = focusPenLinkMode,
+            focusPenDoubleTapWindowMs = focusPenDoubleTapWindowMs,
             pressureEraserEnabled = pressureEraserEnabled,
             pressureEraserThreshold = pressureEraserThreshold,
             recentColors = recentColors,
@@ -242,6 +246,7 @@ class PreferencesManager(private val context: Context) {
             preferences[PreferencesKeys.KEEP_SCREEN_CAPTURE_SESSION] = uiState.keepScreenCaptureSession
             preferences[PreferencesKeys.ROOT_SCREENSHOT_ENABLED] = uiState.rootScreenshotEnabled
             preferences[PreferencesKeys.FOCUS_PEN_LINK_MODE] = uiState.focusPenLinkMode.name
+            preferences[PreferencesKeys.FOCUS_PEN_DOUBLE_TAP_WINDOW_MS] = uiState.focusPenDoubleTapWindowMs
             preferences[PreferencesKeys.PRESSURE_ERASER_ENABLED] = uiState.pressureEraserEnabled
             preferences[PreferencesKeys.PRESSURE_ERASER_THRESHOLD] = uiState.pressureEraserThreshold
             preferences[PreferencesKeys.RECENT_COLORS] = uiState.recentColors.joinToString(",") { it.toArgb().toString(16).padStart(8, '0') }

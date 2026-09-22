@@ -15,6 +15,7 @@ enum class StylusButtonScheme {
 enum class StylusButtonAction {
     None,
     CyclePresetColor,
+    CycleToolbarColor,
     ToggleStrokeEraser,
     TogglePixelEraser,
     Undo,
@@ -22,7 +23,6 @@ enum class StylusButtonAction {
     ToggleCanvasVisibility,
     ToggleCanvasPassthrough,
     ToggleLaser,
-    SwitchPreviousPen,
     ClearCanvas,
     IncreaseStrokeWidth,
     DecreaseStrokeWidth,

@@ -247,6 +247,19 @@ fun SettingsScreen(
                                 }
                                 HorizontalDivider()
                                 OverlayDropdownPreference(
+                                    title = stringResource(R.string.focus_pen_double_tap_window),
+                                    summary = stringResource(R.string.focus_pen_double_tap_hint),
+                                    items = doubleTapWindowLabels(),
+                                    selectedIndex = selectedIndexOf(
+                                        value = doubleTapWindowOptions.minBy { kotlin.math.abs(it - uiState.focusPenDoubleTapWindowMs) },
+                                        values = doubleTapWindowOptions,
+                                    ),
+                                    onSelectedIndexChange = { index ->
+                                        viewModel.setFocusPenDoubleTapWindowMs(doubleTapWindowOptions[index])
+                                    },
+                                )
+                                HorizontalDivider()
+                                OverlayDropdownPreference(
                                     title = stringResource(R.string.focus_pen_link_mode),
                                     items = listOf(
                                         stringResource(R.string.focus_pen_link_mode_direct),
@@ -753,6 +766,13 @@ private fun DiagnosticsPanel() {
 
 private val focusPenLinkModeValues = listOf(FocusPenLinkMode.Direct, FocusPenLinkMode.Sdk)
 
+private val doubleTapWindowOptions = listOf(250, 350, 400, 500, 600)
+
+@Composable
+private fun doubleTapWindowLabels(): List<String> = doubleTapWindowOptions.map {
+    stringResource(R.string.focus_pen_double_tap_window_value, it)
+}
+
 @Composable
 private fun yesNoUnknown(value: Boolean?): String = when (value) {
     true -> stringResource(R.string.value_yes)
@@ -782,6 +802,7 @@ private fun stylusActionLabels(): List<String> = StylusButtonAction.entries.map 
     when (it) {
         StylusButtonAction.None -> stringResource(R.string.stylus_action_none)
         StylusButtonAction.CyclePresetColor -> stringResource(R.string.stylus_action_cycle_color)
+        StylusButtonAction.CycleToolbarColor -> stringResource(R.string.stylus_action_cycle_toolbar_color)
         StylusButtonAction.ToggleStrokeEraser -> stringResource(R.string.stylus_action_stroke_eraser)
         StylusButtonAction.TogglePixelEraser -> stringResource(R.string.stylus_action_pixel_eraser)
         StylusButtonAction.Undo -> stringResource(R.string.undo)
@@ -789,7 +810,6 @@ private fun stylusActionLabels(): List<String> = StylusButtonAction.entries.map 
         StylusButtonAction.ToggleCanvasVisibility -> stringResource(R.string.stylus_action_toggle_canvas)
         StylusButtonAction.ToggleCanvasPassthrough -> stringResource(R.string.stylus_action_toggle_passthrough)
         StylusButtonAction.ToggleLaser -> stringResource(R.string.laser)
-        StylusButtonAction.SwitchPreviousPen -> stringResource(R.string.stylus_action_previous_pen)
         StylusButtonAction.ClearCanvas -> stringResource(R.string.clear_canvas)
         StylusButtonAction.IncreaseStrokeWidth -> stringResource(R.string.stylus_action_increase_width)
         StylusButtonAction.DecreaseStrokeWidth -> stringResource(R.string.stylus_action_decrease_width)

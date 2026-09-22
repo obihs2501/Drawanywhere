@@ -80,6 +80,7 @@ import com.shezik.drawanywhere.R
 import com.shezik.drawanywhere.UiState
 import com.shezik.drawanywhere.model.PenConfig
 import com.shezik.drawanywhere.model.PenType
+import com.shezik.drawanywhere.model.TOOLBAR_COLORS
 import com.shezik.drawanywhere.ui.theme.DrawAnywhereTheme
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -105,18 +106,7 @@ private enum class MainTool(
     Laser(Icons.Default.FlashOn, Color(0xFF69D2E7)),
 }
 
-private val toolbarColors = listOf(
-    Color(0xFF000000),
-    Color(0xFF2238A8),
-    Color(0xFFE31D31),
-    Color(0xFF8E5C5E),
-    Color(0xFF7A58E4),
-    Color(0xFF5165CC),
-    Color(0xFF5BC3DB),
-    Color(0xFFFFD03B),
-    Color(0xFFFB681C),
-    Color(0xFFF2F2F2),
-)
+private val toolbarColors = TOOLBAR_COLORS
 
 private val penWidthsMm = listOf(0.10f, 0.30f, 0.50f)
 private val shapeWidthsMm = listOf(0.30f, 0.50f, 0.80f)

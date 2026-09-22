@@ -29,6 +29,8 @@ import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.shezik.drawanywhere.stylus.DiagnosticLog
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -39,10 +41,11 @@ import kotlin.coroutines.resumeWithException
  * Android 14+ makes the consent token single-use and ties a MediaProjection to
  * exactly one VirtualDisplay, so the only way to avoid the "start recording or
  * casting?" dialog on every save is to keep that one VirtualDisplay alive for
- * the whole service run. Between captures the display has no surface, which
- * WindowManager treats as a paused recording (no compositing cost, nothing
- * rendered). A capture attaches a fresh [ImageReader] surface, takes the first
- * frame produced for it and detaches again.
+ * the whole service run. The display mirrors the screen into an [ImageReader]
+ * continuously; frames are drained and dropped until a capture is requested,
+ * at which point the first frame produced after the request is returned.
+ * (Pausing via a null surface looked cheaper but Android does not reliably
+ * resume such a display, which made every save after the first fail.)
  *
  * Callers must have started a foreground service with type
  * `mediaProjection` before calling [start], and keep it that way while the
@@ -53,6 +56,7 @@ class ScreenCaptureSession private constructor(
     private val virtualDisplay: VirtualDisplay,
     private val callback: MediaProjection.Callback,
     private val handler: Handler,
+    private var reader: ImageReader,
     private var width: Int,
     private var height: Int,
     private var dpi: Int,
@@ -60,9 +64,17 @@ class ScreenCaptureSession private constructor(
     companion object {
         private const val TAG = "ScreenCapture"
         private const val DISPLAY_NAME = "DrawAnywhereScreenCapture"
+        private const val MAX_IMAGES = 2
 
         /** Delay before [captureFrame] pokes the compositor if no frame arrived. */
         private const val NUDGE_DELAY_MS = 450L
+
+        /**
+         * Frames are normally matched by timestamp; if the producer's clock is not
+         * comparable to System.nanoTime(), any frame this long after the request
+         * is accepted instead (overlays were hidden well before the request).
+         */
+        private const val FRESHNESS_GRACE_NS = 300_000_000L
 
         /**
          * Exchanges a consent result for a live session. Returns null when the
@@ -77,16 +89,22 @@ class ScreenCaptureSession private constructor(
             dpi: Int,
             onStopped: () -> Unit,
         ): ScreenCaptureSession? {
+            val w = width.coerceAtLeast(1)
+            val h = height.coerceAtLeast(1)
+            val d = dpi.coerceAtLeast(1)
             val manager = context.getSystemService(MediaProjectionManager::class.java)
             val projection = runCatching { manager.getMediaProjection(resultCode, resultData) }
-                .onFailure { Log.w(TAG, "getMediaProjection failed", it) }
+                .onFailure {
+                    Log.w(TAG, "getMediaProjection failed", it)
+                    DiagnosticLog.log(TAG, "getMediaProjection failed: $it")
+                }
                 .getOrNull() ?: return null
 
             val handler = Handler(Looper.getMainLooper())
             var session: ScreenCaptureSession? = null
             val callback = object : MediaProjection.Callback() {
                 override fun onStop() {
-                    Log.i(TAG, "MediaProjection stopped by system/user")
+                    DiagnosticLog.log(TAG, "MediaProjection.onStop (system or user ended the session)")
                     session?.markStopped()
                     onStopped()
                 }
@@ -94,39 +112,87 @@ class ScreenCaptureSession private constructor(
             // Android 14+ requires a callback to be registered before createVirtualDisplay.
             projection.registerCallback(callback, handler)
 
+            val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, MAX_IMAGES)
             val display = runCatching {
                 projection.createVirtualDisplay(
                     DISPLAY_NAME,
-                    width.coerceAtLeast(1),
-                    height.coerceAtLeast(1),
-                    dpi.coerceAtLeast(1),
+                    w,
+                    h,
+                    d,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    null, // no surface yet: recording stays paused until a capture
+                    reader.surface,
                     null,
                     handler,
                 )
-            }.onFailure { Log.w(TAG, "createVirtualDisplay failed", it) }.getOrNull()
+            }.onFailure {
+                Log.w(TAG, "createVirtualDisplay failed", it)
+                DiagnosticLog.log(TAG, "createVirtualDisplay failed: $it")
+            }.getOrNull()
 
             if (display == null) {
+                runCatching { reader.close() }
                 runCatching { projection.unregisterCallback(callback) }
                 runCatching { projection.stop() }
                 return null
             }
-            return ScreenCaptureSession(projection, display, callback, handler, width, height, dpi)
-                .also { session = it }
+            DiagnosticLog.log(TAG, "session started ${w}x${h}@$d")
+            return ScreenCaptureSession(projection, display, callback, handler, reader, w, h, d)
+                .also {
+                    session = it
+                    it.attachListener()
+                }
         }
     }
+
+    private class CaptureRequest(
+        val startedAtNs: Long,
+        val continuation: CancellableContinuation<Bitmap>,
+    )
 
     @Volatile
     var isStopped: Boolean = false
         private set
 
+    private var pendingRequest: CaptureRequest? = null
+    private var framesSeen = 0L
+
+    private val imageListener = ImageReader.OnImageAvailableListener { r ->
+        val image = r.acquireLatestImage() ?: return@OnImageAvailableListener
+        try {
+            framesSeen++
+            val request = pendingRequest ?: return@OnImageAvailableListener
+            val fresh = image.timestamp >= request.startedAtNs ||
+                System.nanoTime() - request.startedAtNs >= FRESHNESS_GRACE_NS
+            if (!fresh) return@OnImageAvailableListener
+            pendingRequest = null
+            runCatching { image.toBitmap(width, height) }
+                .onSuccess { bitmap ->
+                    if (request.continuation.isActive) request.continuation.resume(bitmap) else bitmap.recycle()
+                }
+                .onFailure { error ->
+                    if (request.continuation.isActive) request.continuation.resumeWithException(error)
+                }
+        } finally {
+            image.close()
+        }
+    }
+
+    private fun attachListener() {
+        reader.setOnImageAvailableListener(imageListener, handler)
+    }
+
     private fun markStopped() {
         isStopped = true
+        pendingRequest?.let { request ->
+            pendingRequest = null
+            if (request.continuation.isActive) {
+                request.continuation.resumeWithException(IllegalStateException("MediaProjection stopped"))
+            }
+        }
     }
 
     /**
-     * Grabs one frame of the whole display at [width]x[height] pixels.
+     * Returns the first frame of the whole display produced after this call.
      * Call from the main thread; wrap in `withTimeout` at the call site.
      *
      * @param nudge invoked once if no frame arrived after a short delay; should
@@ -134,53 +200,62 @@ class ScreenCaptureSession private constructor(
      */
     suspend fun captureFrame(width: Int, height: Int, dpi: Int, nudge: () -> Unit): Bitmap {
         check(!isStopped) { "MediaProjection session is stopped" }
-        val w = width.coerceAtLeast(1)
-        val h = height.coerceAtLeast(1)
-        if (w != this.width || h != this.height || dpi != this.dpi) {
-            virtualDisplay.resize(w, h, dpi.coerceAtLeast(1))
-            this.width = w
-            this.height = h
-            this.dpi = dpi
-        }
+        check(pendingRequest == null) { "capture already in progress" }
+        ensureSize(width.coerceAtLeast(1), height.coerceAtLeast(1), dpi.coerceAtLeast(1))
 
-        val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 3)
+        val framesBefore = framesSeen
         val nudgeRunnable = Runnable {
-            Log.d(TAG, "No frame yet; nudging compositor")
+            DiagnosticLog.log(TAG, "no fresh frame after ${NUDGE_DELAY_MS}ms (frames seen: ${framesSeen - framesBefore}); nudging compositor")
             runCatching(nudge)
         }
         try {
             return suspendCancellableCoroutine { continuation ->
-                reader.setOnImageAvailableListener({ r ->
-                    val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
-                    try {
-                        if (!continuation.isActive) return@setOnImageAvailableListener
-                        continuation.resume(image.toBitmap(w, h))
-                    } catch (error: Throwable) {
-                        if (continuation.isActive) continuation.resumeWithException(error)
-                    } finally {
-                        image.close()
-                    }
-                }, handler)
-                continuation.invokeOnCancellation { handler.removeCallbacks(nudgeRunnable) }
-                virtualDisplay.surface = reader.surface
+                pendingRequest = CaptureRequest(System.nanoTime(), continuation)
+                continuation.invokeOnCancellation {
+                    pendingRequest = null
+                    handler.removeCallbacks(nudgeRunnable)
+                }
                 handler.postDelayed(nudgeRunnable, NUDGE_DELAY_MS)
+            }.also {
+                DiagnosticLog.log(TAG, "frame captured ${it.width}x${it.height} (frames seen: ${framesSeen - framesBefore})")
             }
         } finally {
+            pendingRequest = null
             handler.removeCallbacks(nudgeRunnable)
-            runCatching { virtualDisplay.surface = null }
-            reader.setOnImageAvailableListener(null, null)
-            runCatching { reader.close() }
         }
     }
 
+    private fun ensureSize(w: Int, h: Int, d: Int) {
+        if (w == width && h == height && d == dpi) return
+        DiagnosticLog.log(TAG, "resize ${width}x${height} -> ${w}x${h}@$d")
+        val newReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, MAX_IMAGES)
+        newReader.setOnImageAvailableListener(imageListener, handler)
+        virtualDisplay.resize(w, h, d)
+        virtualDisplay.surface = newReader.surface
+        val old = reader
+        reader = newReader
+        old.setOnImageAvailableListener(null, null)
+        runCatching { old.close() }
+        width = w
+        height = h
+        dpi = d
+    }
+
     fun release() {
-        if (!isStopped) {
-            isStopped = true
+        isStopped = true
+        pendingRequest?.let { request ->
+            pendingRequest = null
+            if (request.continuation.isActive) {
+                request.continuation.resumeWithException(IllegalStateException("session released"))
+            }
         }
+        reader.setOnImageAvailableListener(null, null)
         runCatching { virtualDisplay.surface = null }
         runCatching { virtualDisplay.release() }
         runCatching { projection.unregisterCallback(callback) }
         runCatching { projection.stop() }
+        runCatching { reader.close() }
+        DiagnosticLog.log(TAG, "session released")
     }
 
     private fun Image.toBitmap(width: Int, height: Int): Bitmap {

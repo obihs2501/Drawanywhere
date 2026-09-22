@@ -20,6 +20,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -27,6 +29,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toArgb
 import com.shezik.drawanywhere.DrawController
 import com.shezik.drawanywhere.DrawViewModel
+import com.shezik.drawanywhere.model.StylusButtonAction
 import com.shezik.drawanywhere.model.StylusButtonScheme
 import com.shezik.drawanywhere.stylus.DiagnosticLog
 import com.shezik.drawanywhere.stylus.FocusPenGestureDetector
@@ -118,7 +121,28 @@ class NativeDrawCanvasView(
      */
     var onKeyDiagnostic: ((KeyEvent) -> Unit)? = null
 
-    private val focusPenDetector = FocusPenGestureDetector()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val focusPenDetector = FocusPenGestureDetector(
+        scheduler = FocusPenGestureDetector.Scheduler { delayMs, block ->
+            val runnable = Runnable(block)
+            mainHandler.postDelayed(runnable, delayMs)
+            FocusPenGestureDetector.Cancellable { mainHandler.removeCallbacks(runnable) }
+        },
+        doubleTapWindowMs = {
+            val state = viewModel.uiState.value
+            if (state.focusPenDoubleTapAction == StylusButtonAction.None) 0L
+            else state.focusPenDoubleTapWindowMs.toLong()
+        },
+        onGesture = { gesture ->
+            DiagnosticLog.log(
+                "CanvasKey",
+                "gesture $gesture -> ${viewModel.uiState.value.actionForFocusPenGesture(gesture)}",
+            )
+            viewModel.performFocusPenGesture(gesture)
+            invalidate()
+        },
+    )
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val gestureKey = FocusPenGestureDetector.isGestureKey(event.keyCode, event.scanCode)
@@ -153,20 +177,13 @@ class NativeDrawCanvasView(
      * squeeze scan code 189) once the system handshake (see FocusPenSystemLink)
      * is in place. They are consumed here and mapped through the app's own
      * settings; the system function numbers and stylus settings are never
-     * consulted.
+     * consulted. Double taps are two squeezes and are counted by the detector.
      */
     private fun handleFocusPenKey(event: KeyEvent): Boolean {
         if (viewModel.uiState.value.stylusButtonScheme != StylusButtonScheme.XiaomiFocusPen) {
             return false
         }
-        if (!FocusPenGestureDetector.isGestureKey(event.keyCode, event.scanCode)) return false
-        val gesture = focusPenDetector.onKey(event.keyCode, event.action, event.repeatCount, event.scanCode)
-        if (gesture != null) {
-            DiagnosticLog.log("CanvasKey", "gesture $gesture -> ${viewModel.uiState.value.actionForFocusPenGesture(gesture)}")
-            viewModel.performFocusPenGesture(gesture)
-            invalidate()
-        }
-        return true
+        return focusPenDetector.onKey(event.keyCode, event.action, event.repeatCount, event.scanCode)
     }
 
     private fun handleXiaomiStylusKey(event: KeyEvent): Boolean {

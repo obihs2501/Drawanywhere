@@ -24,3 +24,17 @@ val PRESET_COLORS = listOf(
     Color(0xFF333333),
     Color.Black,
 )
+
+/** The ten swatches shown on the floating toolbar; also cycled by the stylus "cycle color" action. */
+val TOOLBAR_COLORS = listOf(
+    Color(0xFF000000),
+    Color(0xFF2238A8),
+    Color(0xFFE31D31),
+    Color(0xFF8E5C5E),
+    Color(0xFF7A58E4),
+    Color(0xFF5165CC),
+    Color(0xFF5BC3DB),
+    Color(0xFFFFD03B),
+    Color(0xFFFB681C),
+    Color(0xFFF2F2F2),
+)

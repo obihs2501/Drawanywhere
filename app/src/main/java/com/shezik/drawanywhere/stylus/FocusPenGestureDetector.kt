@@ -22,20 +22,34 @@ import com.shezik.drawanywhere.model.FocusPenGesture
  * Turns the key events HyperOS emits for Xiaomi Focus Pen barrel gestures
  * into [FocusPenGesture]s.
  *
- * Two shapes of event exist:
+ * What the system delivers to a registered touch-film client (verified on
+ * HyperOS 4 / Focus Pen Pro):
  *
- * 1. Translated codes the system injects for a registered touch-film client
- *    (decompiled PenEngine SDK, `com.miui.penengine.e.j`):
- *    194 squeeze, 195 double tap, 196 slide up, 197 slide down.
- * 2. The raw pen key as seen in `system_server` when nothing translates it
- *    (FocusPenProX `CompatProfile`): squeeze = scan code 189 (KEY_F19) with
- *    whatever key code the layout assigns; slides keep 196 / 197.
+ *  - squeeze: key code 194 with scan code 189 (KEY_F19), DOWN + UP per squeeze;
+ *    a double tap on the pen arrives as two such squeezes, no dedicated key
+ *  - slide up / down: key codes 196 / 197
+ *  - key code 195 is defined by the PenEngine SDK as "double click"; it is
+ *    honoured if it ever shows up and then supersedes our own tap counting
  *
- * Every gesture fires on ACTION_DOWN. Squeeze latches until ACTION_UP so a
- * held squeeze cannot repeat. Plain Kotlin (no android.view.KeyEvent) so it
- * can be unit-tested on the JVM.
+ * Double taps are therefore detected here: a squeeze whose DOWN arrives within
+ * [doubleTapWindowMs] after the previous squeeze's UP becomes [FocusPenGesture.DoubleTap]
+ * (fired on that second DOWN); a lone squeeze becomes [FocusPenGesture.Squeeze]
+ * once the window elapses. A window of 0 disables counting and fires Squeeze
+ * on DOWN with no delay. Plain Kotlin (no android.view.KeyEvent) so it can be
+ * unit-tested on the JVM; timers go through [Scheduler].
  */
-class FocusPenGestureDetector {
+class FocusPenGestureDetector(
+    private val scheduler: Scheduler,
+    private val doubleTapWindowMs: () -> Long,
+    private val onGesture: (FocusPenGesture) -> Unit,
+) {
+    fun interface Cancellable {
+        fun cancel()
+    }
+
+    fun interface Scheduler {
+        fun schedule(delayMs: Long, block: () -> Unit): Cancellable
+    }
 
     companion object {
         const val KEYCODE_SQUEEZE = 194
@@ -65,37 +79,80 @@ class FocusPenGestureDetector {
         }
     }
 
-    private var squeezeLatched = false
+    private var squeezePressed = false
+    private var pendingSingle: Cancellable? = null
+    private var currentPressIsSecondTap = false
+    private var ignoreCurrentPressUp = false
 
     /**
      * Feed one key event.
      *
-     * @return the gesture to trigger, or null when the event only needs to be
-     *   consumed (key-up, key repeat, latched squeeze). Callers should consume
-     *   every event whose codes pass [isGestureKey] regardless of the return
-     *   value so nothing leaks to windows underneath.
+     * @return true when the event belongs to a pen gesture and must be consumed
+     *   by the caller (also for key-ups and repeats) so nothing leaks to windows
+     *   underneath; false for unrelated keys.
      */
-    fun onKey(keyCode: Int, action: Int, repeatCount: Int = 0, scanCode: Int = 0): FocusPenGesture? {
-        val gesture = gestureForKey(keyCode, scanCode) ?: return null
-        if (gesture == FocusPenGesture.Squeeze) {
-            return when (action) {
-                ACTION_DOWN -> if (squeezeLatched || repeatCount > 0) {
-                    null
-                } else {
-                    squeezeLatched = true
-                    FocusPenGesture.Squeeze
+    fun onKey(keyCode: Int, action: Int, repeatCount: Int = 0, scanCode: Int = 0): Boolean {
+        val gesture = gestureForKey(keyCode, scanCode) ?: return false
+        when (gesture) {
+            FocusPenGesture.Squeeze -> onSqueeze(action, repeatCount)
+            FocusPenGesture.DoubleTap -> if (action == ACTION_DOWN && repeatCount == 0) {
+                // System-synthesised double tap: supersedes our own tap counting.
+                cancelPendingSingle()
+                if (squeezePressed) ignoreCurrentPressUp = true
+                onGesture(FocusPenGesture.DoubleTap)
+            }
+            FocusPenGesture.SlideUp, FocusPenGesture.SlideDown ->
+                if (action == ACTION_DOWN && repeatCount == 0) onGesture(gesture)
+        }
+        return true
+    }
+
+    private fun onSqueeze(action: Int, repeatCount: Int) {
+        when (action) {
+            ACTION_DOWN -> {
+                if (squeezePressed || repeatCount > 0) return
+                squeezePressed = true
+                if (doubleTapWindowMs() <= 0L) {
+                    onGesture(FocusPenGesture.Squeeze)
+                    return
                 }
-                ACTION_UP -> {
-                    squeezeLatched = false
-                    null
+                if (pendingSingle != null) {
+                    cancelPendingSingle()
+                    currentPressIsSecondTap = true
+                    onGesture(FocusPenGesture.DoubleTap)
                 }
-                else -> null
+            }
+            ACTION_UP -> {
+                if (!squeezePressed) return
+                squeezePressed = false
+                if (currentPressIsSecondTap) {
+                    currentPressIsSecondTap = false
+                    return
+                }
+                if (ignoreCurrentPressUp) {
+                    ignoreCurrentPressUp = false
+                    return
+                }
+                val window = doubleTapWindowMs()
+                if (window <= 0L) return
+                cancelPendingSingle()
+                pendingSingle = scheduler.schedule(window) {
+                    pendingSingle = null
+                    onGesture(FocusPenGesture.Squeeze)
+                }
             }
         }
-        return if (action == ACTION_DOWN && repeatCount == 0) gesture else null
+    }
+
+    private fun cancelPendingSingle() {
+        pendingSingle?.cancel()
+        pendingSingle = null
     }
 
     fun reset() {
-        squeezeLatched = false
+        cancelPendingSingle()
+        squeezePressed = false
+        currentPressIsSecondTap = false
+        ignoreCurrentPressUp = false
     }
 }

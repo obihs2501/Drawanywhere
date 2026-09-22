@@ -58,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import com.shezik.drawanywhere.capture.RootScreenshot
 import com.shezik.drawanywhere.capture.ScreenCaptureSession
+import com.shezik.drawanywhere.stylus.DiagnosticLog
 import com.shezik.drawanywhere.stylus.FocusPenSystemLink
 import com.shezik.drawanywhere.view.DismissTargetView
 import com.shezik.drawanywhere.view.ToolbarLifecycleOwner
@@ -552,10 +553,12 @@ class MainService : Service() {
         )
         if (session == null) {
             restoreRegularForegroundType()
+            DiagnosticLog.log("Capture", "could not start capture session")
             return false
         }
         captureSession = session
         Log.i(TAG, "Screen capture session started (${displayWidth}x${displayHeight})")
+        DiagnosticLog.log("Capture", "capture session started ${displayWidth}x${displayHeight}, keep=${viewModel.uiState.value.keepScreenCaptureSession}")
         return true
     }
 
@@ -563,6 +566,7 @@ class MainService : Service() {
         // Invoked on the main thread when the user/system ends the projection
         // (status-bar chip, screen lock policy, ...). Next save re-prompts.
         if (captureSession != null) {
+            DiagnosticLog.log("Capture", "capture session stopped externally")
             captureSession = null
             restoreRegularForegroundType()
         }
@@ -627,11 +631,16 @@ class MainService : Service() {
                 throw error
             } catch (error: Throwable) {
                 Log.e(TAG, "Screen capture failed", error)
+                DiagnosticLog.log("Capture", "screen capture failed: $error")
+                // A session that cannot deliver frames is useless: drop it so the
+                // next save asks for consent again instead of failing forever.
+                releaseCaptureSession()
                 showToast(R.string.export_failed)
                 return
             }
             if (background == null) {
                 // No usable session (root failed / projection stopped): ask once, then retry.
+                DiagnosticLog.log("Capture", "no capture session; requesting consent")
                 pendingExportMode = mode
                 requestScreenCapturePermission()
                 return
@@ -671,11 +680,15 @@ class MainService : Service() {
         val state = viewModel.uiState.value
         if (state.rootScreenshotEnabled) {
             val rootShot = RootScreenshot.capture()
-            if (rootShot != null) return@withOverlaysHidden cropToCanvas(rootShot)
+            if (rootShot != null) {
+                DiagnosticLog.log("Capture", "root screenshot ${rootShot.width}x${rootShot.height}")
+                return@withOverlaysHidden cropToCanvas(rootShot)
+            }
             showToast(R.string.root_screenshot_failed)
         }
         val session = captureSession?.takeIf { !it.isStopped } ?: return@withOverlaysHidden null
         val (displayWidth, displayHeight) = getDisplaySize()
+        DiagnosticLog.log("Capture", "requesting frame ${displayWidth}x${displayHeight} from kept session")
         val fullScreen = withTimeout(CAPTURE_TIMEOUT_MS) {
             session.captureFrame(
                 width = displayWidth,
